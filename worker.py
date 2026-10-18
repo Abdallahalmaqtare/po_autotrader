@@ -165,7 +165,9 @@ class TradingWorker:
             if not self.repo.leader:
                 raise RuntimeError('lease_not_owned')
             if self.pending:
-                raise ValueError('يوجد أمر سابق غير محسوم؛ راجع المنصة ثم استخدم زر مراجعة الأمر المعلّق.')
+                await self.repo.acknowledge_pending()
+                print('[WORKER] previous uncertain order auto-archived as UNCONFIRMED '
+                      '(never resent); starting fresh', flush=True)
             mode = self.repo.doc['account_mode']
             key = 'real_account' if mode == 'REAL' else 'demo_account'
             try:
@@ -241,7 +243,8 @@ class TradingWorker:
                 if not self.repo.leader:
                     raise RuntimeError('lease_lost')
                 if self.pending:
-                    raise RuntimeError('unresolved_order')
+                    await self.repo.acknowledge_pending()
+                    print('[WORKER] stale pending marker auto-archived; continuing', flush=True)
                 mode = self.repo.doc['account_mode']
                 t = deepcopy(self.repo.doc['trading'])
                 self.apply_snapshot(mode, t)
@@ -306,15 +309,31 @@ class TradingWorker:
                     break
                 self.in_flight = True
                 self.stage = 'order_send'
-                ok = await asyncio.wait_for(self.po.place_trade(direction, order['amount']),
-                                             config.CONNECT_TIMEOUT_SECONDS)
-                if not ok:
-                    raise SafeIssue('ORDER_UNCERTAIN')
-                before = self.po._balance_before
-                self.stage = 'order_result'
-                result = await self.po.wait_for_result(t['duration_seconds'] + t['result_timeout_extra'])
-                if not self.po.connected or result is None:
-                    raise SafeIssue('ORDER_UNCERTAIN')
+                before = None
+                result = None
+                try:
+                    ok = await asyncio.wait_for(self.po.place_trade(direction, order['amount']),
+                                                 config.CONNECT_TIMEOUT_SECONDS)
+                    before = self.po._balance_before
+                    if ok:
+                        self.stage = 'order_result'
+                        result = await self.po.wait_for_result(
+                            t['duration_seconds'] + t['result_timeout_extra'])
+                except Exception as send_err:
+                    print(f'[WORKER] send/result error ({type(send_err).__name__}) - continuing', flush=True)
+                    ok = False
+                if result is None:
+                    # Uncertain outcome: NEVER stop and never force a manual review.
+                    # Keep the SAME martingale step (no doubling on an unverified trade),
+                    # archive the order as unconfirmed, reconnect automatically and go on.
+                    print('[WORKER] UNCONFIRMED -> amount kept at current step; '
+                          'auto-reconnecting and continuing without review', flush=True)
+                    self.stage = 'result_save'
+                    await self.repo.resolve(order, None, before, self.po.balance, mm.step)
+                    self.in_flight = False
+                    self.stage = 'delay'
+                    await self._pause(t['loop_delay_seconds'])
+                    continue
                 mm.register_result(result)
                 self.stage = 'result_save'
                 await self.repo.resolve(order, result, before, self.po.balance, mm.step)
