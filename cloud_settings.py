@@ -60,7 +60,8 @@ def auth_frame(value, mode, uid=0):
 def empty_stats():
     return dict(total_trades=0, won_trades=0, lost_trades=0, draws=0,
                 unconfirmed=0, pending_trades=0, net_pnl=0.0,
-                total_staked=0.0, total_returned=0.0, financial_trades=0)
+                total_staked=0.0, total_returned=0.0, financial_trades=0,
+                sequence_losses=0, lost_amount=0.0)
 
 
 def defaults():

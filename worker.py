@@ -239,6 +239,7 @@ class TradingWorker:
             await self._telegram()
             mm = None
             signature = None
+            chain_stake = 0.0
             while not self.stop_event.is_set():
                 if not self.repo.leader:
                     raise RuntimeError('lease_lost')
@@ -257,6 +258,7 @@ class TradingWorker:
                     mm = MoneyManager(t['trade_amount'], t['martingale_steps'])
                     mm.step = int(self.repo.doc['runtime'].get('martingale_step', 0))
                     signature = sig
+                    chain_stake = 0.0
                 if not self.po or not self.po.connected or self.po.mode != mode:
                     self.stage = 'connecting'
                     try:
@@ -322,6 +324,8 @@ class TradingWorker:
                 except Exception as send_err:
                     print(f'[WORKER] send/result error ({type(send_err).__name__}) - continuing', flush=True)
                     ok = False
+                chain_stake += order['amount']
+                prev_step = mm.step
                 if result is None:
                     # Uncertain outcome: NEVER stop and never force a manual review.
                     # Keep the SAME martingale step (no doubling on an unverified trade),
@@ -335,8 +339,22 @@ class TradingWorker:
                     await self._pause(t['loop_delay_seconds'])
                     continue
                 mm.register_result(result)
+                seq_lost = 0
+                seq_lost_amount = 0.0
+                if result == 'win':
+                    chain_stake = 0.0                     # sequence closed with a win
+                elif result == 'loss':
+                    if prev_step >= mm.max_doubles - 1:
+                        # ALL doubling steps lost -> ONE full sequence loss (user rule)
+                        seq_lost = 1
+                        seq_lost_amount = chain_stake
+                        print(f'[WORKER] FULL SEQUENCE LOST ({mm.max_doubles} steps) '
+                              f'-> counted as ONE lost trade, lost stake ${chain_stake:g}', flush=True)
+                        chain_stake = 0.0
+                # draw: chain_stake kept (same step repeats with same amount)
                 self.stage = 'result_save'
-                await self.repo.resolve(order, result, before, self.po.balance, mm.step)
+                await self.repo.resolve(order, result, before, self.po.balance, mm.step,
+                                        seq_lost=seq_lost, seq_lost_amount=seq_lost_amount)
                 self.in_flight = False
                 self.stage = 'delay'
                 await self._pause(t['loop_delay_seconds'])

@@ -41,7 +41,8 @@ def home():
     return kb([[('▶️ بدء التداول | Start', 'start'), ('⏹️ إيقاف | Stop', 'stop')],
                [('⚙️ الإعدادات | Settings', 'settings')],
                [('📊 الإحصائيات | Stats', 'stats'), ('🔄 الحالة | Status', 'status')],
-               [('🧪 فحص الاتصال دون تداول', 'diagnose')]])
+               [('🧪 فحص الاتصال دون تداول', 'diagnose')],
+               [('🗑 تصفير السجل | Reset Stats', 'reset_stats')]])
 
 
 def settings_kb():
@@ -81,22 +82,30 @@ def report(repo, worker):
     rate = s['won_trades']/settled*100 if settled else 0
     bal = f'${worker.balance:.2f}' if worker.balance is not None else 'غير متاح'
     pending = 1 if worker.pending else 0
-    return (f"📊 التقرير المحفوظ — {d['account_mode']}\n"
+    net = s['net_pnl']
+    net_s = f"+${net:.2f} 🟢" if net >= 0 else f"-${abs(net):.2f} 🔴"
+    return (f"📊 تقرير الأداء — {d['account_mode']}\n"
             f"الحالة: {'شغال 🟢' if worker.running else 'متوقف 🔴'}\n"
             f"الزوج: {t['asset']} | المدة: {t['duration_seconds']}s\n"
             f"الأساس: ${t['trade_amount']:g} | مستويات التدبيل: {t['martingale_steps']}\n"
             '───────────────────────\n'
-            f"إجمالي الأوامر المرسلة المسجّلة: {s['total_trades']}\n"
-            f"WON: {s['won_trades']} | LOST: {s['lost_trades']} | DRAW: {s['draws']}\n"
-            f"غير مؤكدة: {s['unconfirmed']} | أمر معلّق للمراجعة: {pending}\n"
-            f"Win Rate (دون التعادل وغير المؤكد): {rate:.1f}%\n"
+            '📈 الصفقات والنتائج:\n'
+            f"• إجمالي الصفقات المنفذة: {s['total_trades']}\n"
+            f"• رابحة (WON): {s['won_trades']}\n"
+            f"• خاسرة (LOST): {s['lost_trades']}\n"
+            f"• تعادل (DRAW): {s['draws']}\n"
+            f"• خاسرة بعد استنفاد التدبيلات (سلسلة كاملة): {s['sequence_losses']}\n"
+            f"• غير مؤكدة: {s['unconfirmed']} | معلّقة: {pending}\n"
+            f"• نسبة النجاح (Win Rate): {rate:.1f}%\n"
             '───────────────────────\n'
-            f"إجمالي المدفوع المسجل: ${s['total_staked']:.2f}\n"
-            f"العوائد المقدّرة للأوامر محسومة الرصيد: ${s['total_returned']:.2f}\n"
-            f"Net PnL المقدّر: {s['net_pnl']:+.2f}$\n"
-            f"الرصيد الأخير: {bal}\n"
+            '💰 التقرير المالي (بمفهوم المنصة):\n'
+            f"• العائد (إجمالي مبالغ الدخول): ${s['total_staked']:.2f}\n"
+            f"• العوائد المستلمة: ${s['total_returned']:.2f}\n"
+            f"• الربح / الخسارة الصافية: {net_s}\n"
+            f"• إجمالي المفقود في السلاسل المستنفدة: ${s['lost_amount']:.2f}\n"
+            f"• الرصيد الحالي للحساب: {bal}\n"
             'التقرير مستقل لكل حساب ومحفوظ عبر إعادة التشغيل.\n'
-            'المبالغ استدلال من الرصيد وليست كشف حساب رسمي؛ الأوامر غير المحسومة لا يُفترض أنها خسائر.')
+            'المبالغ استدلال من الرصيد وليست كشف حساب رسمي؛ الأوامر غير المحسومة لا تُحسب خسائر.')
 
 
 async def panel(bot, cb, text, markup):
@@ -146,6 +155,15 @@ def build_dispatcher(repo, worker, bot):
                 worker.request_stop()
                 text = await worker.stop()
                 return await panel(bot, cb, text, home())
+            if action == 'reset_stats':
+                return await panel(bot, cb, '🗑 تصفير السجل\nسيتم إيقاف التداول وتصفير كل الإحصائيات '
+                                   'والعائد المالي لكلا الحسابين. هل أنت متأكد؟',
+                                   kb([[('نعم، صفّر السجل', 'reset_confirm')], [('إلغاء', 'home')]]))
+            if action == 'reset_confirm':
+                await worker.stop()
+                await repo.reset_stats()
+                return await panel(bot, cb, '✅ تم تصفير السجل بالكامل. التداول متوقف — اضغط Start للبدء من جديد.',
+                                   home())
             if action == 'stats':
                 return await panel(bot, cb, report(repo, worker), home())
             if action == 'diagnose':

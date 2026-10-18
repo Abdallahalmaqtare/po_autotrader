@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from pymongo import AsyncMongoClient, ReturnDocument
 from pymongo.write_concern import WriteConcern
-from cloud_settings import defaults, validate_document, patched
+from cloud_settings import defaults, validate_document, patched, empty_stats, MODES
 
 
 def utcnow():
@@ -93,7 +93,8 @@ class Repository:
                 raise RuntimeError('pending_or_lease_lost')
             self.doc['runtime']['pending'] = deepcopy(order)
 
-    async def resolve(self, order, result, before, after, next_step, dispatched=True):
+    async def resolve(self, order, result, before, after, next_step, dispatched=True,
+                      seq_lost=0, seq_lost_amount=0.0):
         """Idempotent by pending ID. Unknown finances are never counted as full loss."""
         amount = order['amount']
         mode = order['mode']
@@ -111,6 +112,9 @@ class Repository:
                                   financial_trades=1)
             else:
                 values['unconfirmed'] = 1
+            if seq_lost:
+                values['sequence_losses'] = seq_lost
+                values['lost_amount'] = round(seq_lost_amount, 6)
             for prefix in ('session_stats', 'account_stats.' + mode):
                 inc.update({prefix + '.' + k: v for k, v in values.items()})
         update = {'$set': {'runtime.pending': None, 'runtime.martingale_step': next_step,
@@ -141,6 +145,19 @@ class Repository:
             r = await self.collection.update_one(self.fence(), {'$set': {'runtime.martingale_step': 0}})
             if r.matched_count != 1:
                 raise RuntimeError('lease_lost')
+            self.doc['runtime']['martingale_step'] = 0
+
+    async def reset_stats(self):
+        """Zero all statistics and the martingale step (ledger reset on user request)."""
+        async with self.lock:
+            update = {'$set': {'session_stats': empty_stats(),
+                               'account_stats': {m: empty_stats() for m in MODES},
+                               'runtime.martingale_step': 0}}
+            r = await self.collection.update_one(self.fence(), update)
+            if r.matched_count != 1:
+                raise RuntimeError('lease_lost')
+            self.doc['session_stats'] = empty_stats()
+            self.doc['account_stats'] = {m: empty_stats() for m in MODES}
             self.doc['runtime']['martingale_step'] = 0
 
     async def close(self):
