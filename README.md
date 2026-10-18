@@ -1,3 +1,63 @@
+# إصلاح بدء التداول v12 — ValueError والتشخيص الآمن
+
+## ما يثبته السجل وما لا يثبته
+السجل المرسل يبين نجاح Render وخادم الصحة وبدء controller، ثم ValueError داخل worker. لا يحتوي على stack/مرحلة الفشل، ولذلك لا يمكن الجزم أن السبب StringSession أو اسم بوت الإشارات أو بيانات المنصة. تحذير TelegramNetworkError الظاهر له retry من aiogram؛ لا نعطل تلك الإعادة ولا نزعم أنه سبب ValueError.
+
+## التعديلات المحدودة
+- telegram_bootstrap.py: تنظيف تنسيق StringSession (اقتباسات، أسطر، لصق assignment كامل)، ثم التحقق بواسطة Telethon الحقيقي. لا يُنشئ جلسة بديلة ولا يصلح جلسة منتهية الصلاحية ولا يخمّن auth key.
+- دعم اسم مصدر الإشارات بصيغة @username أو رابط t.me مباشر، دون تبديل المصدر تلقائياً.
+- تنظيف اتصال Telethon جزئي التهيئة إذا فشل حل اسم البوت، وإعادة تهيئته في المحاولة التالية بدلاً من اعتبار socket المفتوح نجاحاً.
+- التشخيص يظهر code وstage واسم الملف ورقم السطر فقط؛ لا يعرض نص الاستثناء الخام أو بيانات الجلسة أو متغيرات traceback.
+- رسائل محددة لجلسة غير صالحة/غير مخولة، اسم بوت غير موجود، هدف ليس بوتاً، وبيانات مصادقة منصة غير صالحة.
+- تحمّل isDemo بصيغ JSON الرقمي/المنطقي والنصي المقبولة دون تحويل قيمة غريبة إلى ValueError.
+- زر «فحص الاتصال دون تداول»: يفحص حساب تيليجرام ومصدر الإشارات ومصادقة الوسيط؛ لا يضغط New signal ولا يفتح صفقة. يرفض مقاطعة حلقة تداول شغالة.
+- تنبيه خاص للأدمن عند فشل worker الخلفي، مع حد للتكرار؛ تظل أخطاء الشبكة العابرة للـ polling خاضعة لإعادة المحاولة الحالية.
+
+لا تغيير على خوارزمية التدبيل أو توقيتات التداول أو قواعد PnL أو بيانات MongoDB المحفوظة. لم تُنفذ صفقات أو اتصالات حية بحسابك.
+
+## تطبيق الإصلاح على Render
+1. أوقف التداول وارفع هذه الملفات إلى نفس مستودع الخدمة، ثم Deploy. احتفظ بنفس MONGO_URI وDB_NAME وSecret Files وباقي المتغيرات. لا تحذف current_settings ولا تغير schema_version.
+2. أرسل /start للوحة مجدداً لتظهر الأزرار الجديدة. اضغط «فحص الاتصال دون تداول» قبل Start.
+3. إذا ظهر كود، طبّق الإجراء المقابل أدناه ثم أعد الفحص. تعديل متغير Render يحتاج Deploy؛ البيانات المخزنة في MongoDB تُحدث من Accounts.
+
+| الكود | الإجراء |
+|---|---|
+| TG_SESSION_INVALID | TELEGRAM_STRING_SESSION يجب أن تكون Telethon StringSession، وليست po_session أو Bot Token أو SSID. أنشئها محلياً بالأداة أدناه. |
+| TG_SESSION_UNAUTHORIZED | الجلسة أُلغيت أو غير مخولة؛ أعد تسجيل الدخول محلياً ثم حدث المتغير وأعد النشر. |
+| TG_API_INVALID | صحح TELEGRAM_API_ID وTELEGRAM_API_HASH من حساب تيليجرام الذي صدرت منه الجلسة. |
+| SIGNAL_BOT_UNRESOLVED | صحح SIGNAL_BOT_USERNAME في Render، وافتح نفس البوت من حساب StringSession واضغط Start يدوياً. |
+| SIGNAL_TARGET_NOT_BOT | المصدر المكتوب قناة/مستخدم وليس بوت الإشارات. |
+| PO_CREDENTIALS_INVALID | حدّث الحساب المختار من Accounts بإطار auth فعلي يحوي session وuid الصحيح، وليس قيم القالب. تعديل Render وحده لا يستبدل القيم السابقة في MongoDB. |
+| PO_AUTH_REJECTED / PO_CONNECT_FAILED | راجع صلاحية SSID والرابط الخاصين بالحساب والمنطقة. |
+| ORDER_UNCERTAIN | راجع المنصة أولاً ثم الأمر المعلق؛ لا تُعِد إرسال صفقة غير محسومة. |
+
+### توليد جلسة حساب تيليجرام على جهازك فقط
+بعد إدخال TELEGRAM_API_ID وTELEGRAM_API_HASH في .env المحلي:
+
+```sh
+python session_tool.py --from-file po_session.session
+# أو تسجيل الدخول محلياً:
+python session_tool.py --login
+```
+
+ضع القيمة الناتجة في TELEGRAM_STRING_SESSION داخل Render. لا ترسلها في المحادثة ولا تضعها في Git.
+
+مثال تشخيص غير سري (مثال وليس استنتاجاً لسبب حسابك):
+
+```text
+[WORKER] paused; code=SIGNAL_BOT_UNRESOLVED; stage=signal_bot_resolve; type=ValueError; at=worker.py:NN
+```
+
+## الاختبارات
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+الاختبارات محلية: تستخدم محلل StringSession الحقيقي مع مفاتيح اصطناعية، ومحاكاة الشبكة وMongoDB. نجاحها لا يثبت صلاحية جلسة Render أو وجود مصدر الإشارات أو قبول الوسيط لأوامر حسابك؛ تلك تحتاج فحص الاتصال من بيئتك.
+
+---
+
 # po_autotrader — Render + MongoDB Atlas (v11)
 
 مشروع تحكم وتداول قابل للنشر، مبني على الحزمة المرفقة. لا توجد داخل هذه الحزمة جلسات شخصية أو توكناتك أو ملف .env الفعلي أو سجل صفقاتك. تم الإبقاء على ملفات pocket_option.py وtelegram_signal.py وmartingale.py وlogger.py كما كانت، وتوجد بصماتها في original_core_hashes.json. أُضيف محوّل cloud_transport.py للاتصال السحابي ودورة حياة الاتصالات، وأُعيد تنظيم worker والتحكم والإعدادات.

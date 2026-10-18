@@ -19,7 +19,7 @@ def number(key, default, integer=False):
         raise ValueError(f'Invalid numeric environment variable: {key}') from None
 
 TELEGRAM_API_ID = number('TELEGRAM_API_ID', 0, True)
-TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH', '')
+TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH', '').strip().strip("'\"")
 ADMIN_TELEGRAM_ID = number('ADMIN_TELEGRAM_ID', 0, True) if os.getenv('ADMIN_TELEGRAM_ID','').strip() else 0
 CONTROL_BOT_TOKEN = os.getenv('CONTROL_BOT_TOKEN', '')
 TELEGRAM_SESSION_NAME = os.getenv('TELEGRAM_SESSION_NAME', 'po_session')

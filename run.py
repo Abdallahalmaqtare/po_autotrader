@@ -52,6 +52,7 @@ async def main():
     runner = web.AppRunner(health_application(state), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', config.PORT).start()
+    print('[APP] build=v12-startup-fix', flush=True)
     print('[APP] health server bound; starting dependencies', flush=True)
     repo = None
     worker = None

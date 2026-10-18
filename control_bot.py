@@ -40,7 +40,8 @@ def kb(rows):
 def home():
     return kb([[('▶️ بدء التداول | Start', 'start'), ('⏹️ إيقاف | Stop', 'stop')],
                [('⚙️ الإعدادات | Settings', 'settings')],
-               [('📊 الإحصائيات | Stats', 'stats'), ('🔄 الحالة | Status', 'status')]])
+               [('📊 الإحصائيات | Stats', 'stats'), ('🔄 الحالة | Status', 'status')],
+               [('🧪 فحص الاتصال دون تداول', 'diagnose')]])
 
 
 def settings_kb():
@@ -108,6 +109,9 @@ async def panel(bot, cb, text, markup):
 
 def build_dispatcher(repo, worker, bot):
     dp = Dispatcher()
+    async def notify_diagnostic(text):
+        await bot.send_message(config.ADMIN_TELEGRAM_ID, '⚠️ تشخيص بدء التداول\n' + text)
+    worker.notify = notify_diagnostic
     dp.message.outer_middleware(AdminOnly())
     dp.callback_query.outer_middleware(AdminOnly())
 
@@ -144,13 +148,18 @@ def build_dispatcher(repo, worker, bot):
                 return await panel(bot, cb, text, home())
             if action == 'stats':
                 return await panel(bot, cb, report(repo, worker), home())
+            if action == 'diagnose':
+                text = await worker.diagnose()
+                return await panel(bot, cb, text, home())
             if action == 'status':
                 text = (f"الحساب: {repo.doc['account_mode']}\nالمرحلة: {worker.stage}\n"
                         f"WebSocket: {'متصل' if worker.po and worker.po.connected else 'غير متصل'}\n"
                         f"MongoDB writer: {'فعال' if repo.leader else 'غير فعال'}\n"
                         f"الزوج: {repo.doc['trading']['asset']}\n"
-                        f"آخر نوع خطأ: {worker.last_error or 'لا يوجد'}\n"
+                        f"آخر كود خطأ: {worker.last_error or 'لا يوجد'}\n"
                         'البيانات السرية لا تظهر في اللوحة.')
+                if worker.diagnostic:
+                    text += '\n\n' + worker.diagnostic.public_text()
                 rows = [[('🔍 مراجعة الأمر المعلّق', 'review')], [('⬅️ الرئيسية', 'home')]] if worker.pending else None
                 return await panel(bot, cb, text, kb(rows) if rows else home())
             if action == 'settings':

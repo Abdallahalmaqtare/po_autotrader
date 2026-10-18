@@ -12,6 +12,7 @@ import websockets
 import config
 from pocket_option import PocketOptionWS, USER_AGENT
 from cloud_settings import auth_frame
+from diagnostics import SafeIssue
 
 
 class EventDecoder:
@@ -81,8 +82,11 @@ class CloudPocket(PocketOptionWS):
         name, payload = event[:2]
         if name == 'updateBalance' and isinstance(payload, dict):
             demo = payload.get('isDemo')
-            if demo is not None and int(demo) != (1 if self.mode == 'PRACTICE' else 0):
-                return
+            if demo is not None:
+                flags = {'true': 1, 'false': 0, '1': 1, '0': 0}
+                parsed = int(demo) if isinstance(demo, (bool, int, float)) and demo in (0, 1) else flags.get(str(demo).strip().lower())
+                if parsed is None or parsed != (1 if self.mode == 'PRACTICE' else 0):
+                    return
             try:
                 value = float(payload['balance'])
             except (KeyError, TypeError, ValueError):
@@ -126,7 +130,7 @@ class CloudPocket(PocketOptionWS):
                         if not isinstance(event, list) or not event:
                             continue
                         if event[0] in ('failauth', 'errorauth', 'authError'):
-                            raise RuntimeError('authentication_rejected')
+                            raise SafeIssue('PO_AUTH_REJECTED')
                         self.process(event)
                         authenticated = event[0] == 'successauth' or self.balance is not None
                 self.connected = True
