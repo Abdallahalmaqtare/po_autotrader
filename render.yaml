@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: po-autotrader-control
+    runtime: python
+    plan: starter
+    numInstances: 1
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -u run.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: CONTROL_BOT_TOKEN
+        sync: false
+      - key: ADMIN_TELEGRAM_ID
+        sync: false
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: TELEGRAM_STRING_SESSION
+        sync: false
+      - key: SIGNAL_BOT_USERNAME
+        value: "@AboodTradingOTCbot"
+      - key: MONGO_URI
+        sync: false
+      - key: DB_NAME
+        value: abood_trading_db
+      - key: ACCOUNT_TYPE
+        value: PRACTICE

@@ -1,0 +1,26 @@
+{
+  "_id": "current_settings",
+  "account_mode": "PRACTICE",
+  "demo_account": {
+    "ssid": "<secret>",
+    "ws_url": "wss://demo-api-eu.po.market/socket.io/?EIO=4&transport=websocket"
+  },
+  "real_account": {
+    "ssid": "<secret>",
+    "ws_url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket"
+  },
+  "trading": {
+    "asset": "EURUSD_otc",
+    "trade_amount": 1.0,
+    "duration_seconds": 5,
+    "martingale_steps": 4,
+    "entry_delay_seconds": 0.8
+  },
+  "session_stats": {
+    "total_trades": 0,
+    "won_trades": 0,
+    "lost_trades": 0,
+    "draws": 0,
+    "net_pnl": 0.0
+  }
+}
