@@ -30,7 +30,7 @@ MONGO_URI = os.getenv('MONGO_URI', '')
 DB_NAME = os.getenv('DB_NAME', 'abood_trading_db')
 PORT = number('PORT', 10000, True)
 DEMO_URL = 'wss://demo-api-eu.po.market/socket.io/?EIO=4&transport=websocket'
-REAL_URL = 'wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket'
+REAL_URL = 'wss://api-msk.po.market/socket.io/?EIO=4&transport=websocket'
 ACCOUNT_TYPE = os.getenv('ACCOUNT_TYPE', 'PRACTICE').upper()
 IS_DEMO = 1 if ACCOUNT_TYPE == 'PRACTICE' else 0
 ASSET = os.getenv('ASSET', 'EURUSD_otc')

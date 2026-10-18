@@ -72,35 +72,52 @@ class CloudPocket(PocketOptionWS):
         self.credentials = credentials.copy()
         self.decoder = EventDecoder()
         self.balance_at = 0.0
+        self.saw_other_account_balance = False
 
     def _build_auth_frame(self):
         return auth_frame(self.credentials['ssid'], self.mode, self.credentials.get('uid', 0))
 
     def process(self, event):
+        """Accept balance from ANY event carrying a numeric 'balance' (the proven
+        local build tolerated all frames). When an isDemo flag is present it must
+        match the selected account; a mismatch is flagged so the worker reports
+        PO_ACCOUNT_MISMATCH instead of a generic missing balance."""
         if not isinstance(event, list) or len(event) < 2:
             return
         name, payload = event[:2]
-        if name == 'updateBalance' and isinstance(payload, dict):
-            demo = payload.get('isDemo')
-            if demo is not None:
+        if not isinstance(payload, dict) or 'balance' not in payload:
+            return
+        demo = payload.get('isDemo')
+        expected = 1 if self.mode == 'PRACTICE' else 0
+        if demo is not None:
+            if isinstance(demo, bool):
+                parsed = int(demo)
+            elif isinstance(demo, (int, float)) and demo in (0, 1):
+                parsed = int(demo)
+            else:
                 flags = {'true': 1, 'false': 0, '1': 1, '0': 0}
-                parsed = int(demo) if isinstance(demo, (bool, int, float)) and demo in (0, 1) else flags.get(str(demo).strip().lower())
-                if parsed is None or parsed != (1 if self.mode == 'PRACTICE' else 0):
-                    return
-            try:
-                value = float(payload['balance'])
-            except (KeyError, TypeError, ValueError):
+                parsed = flags.get(str(demo).strip().lower())
+            if parsed is None:
                 return
-            if math.isfinite(value) and value >= 0:
-                self.balance = value
-                self.balance_at = time.monotonic()
-        # Result frames remain decoded, but the inherited sizing decision
-        # deliberately uses the existing balance-comparison + recheck algorithm.
+            if parsed != expected:
+                self.saw_other_account_balance = True
+                print('[PO] balance frame arrived for the OTHER account type - '
+                      'stored SSID does not match the selected account mode', flush=True)
+                return
+        try:
+            value = float(payload['balance'])
+        except (TypeError, ValueError):
+            return
+        if math.isfinite(value) and value >= 0:
+            self.balance = value
+            self.balance_at = time.monotonic()
+            print(f'[PO] Balance received ({self.mode}): {value}', flush=True)
 
     async def connect(self):
         await self.close()
         self.decoder = EventDecoder()
         self.balance = None
+        self.saw_other_account_balance = False
         headers = {'User-Agent': USER_AGENT, 'Origin': 'https://pocketoption.com'}
         kwargs = dict(ping_interval=None, max_size=2**22, close_timeout=3,
                       open_timeout=10, ssl=ssl.create_default_context())

@@ -1,5 +1,6 @@
 """Render entry point: bind health port FIRST, then Mongo lease and Telegram polling."""
 import asyncio
+import os
 import logging
 import signal
 import time
@@ -34,6 +35,28 @@ def health_application(state):
     return app
 
 
+async def keep_alive(public_url, shutdown):
+    """Self-ping /health so the Render free instance counts inbound traffic and
+    does not spin down. Interval via KEEP_ALIVE_SECONDS (default 600s, safely
+    under Render's 15-minute idle limit). Best-effort aid; paid plan is the guarantee."""
+    try:
+        interval = max(60.0, float(os.getenv('KEEP_ALIVE_SECONDS', '600') or 600))
+    except ValueError:
+        interval = 600.0
+    import aiohttp
+    async with aiohttp.ClientSession() as session:
+        while not shutdown.is_set():
+            await wait_or_shutdown(shutdown, interval)
+            if shutdown.is_set():
+                break
+            try:
+                async with session.get(public_url + '/health',
+                                       timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    print('[APP] keep-alive ping ->', resp.status, flush=True)
+            except Exception as e:
+                print('[APP] keep-alive failed:', type(e).__name__, flush=True)
+
+
 async def wait_or_shutdown(event, seconds):
     try:
         await asyncio.wait_for(event.wait(), seconds)
@@ -52,7 +75,7 @@ async def main():
     runner = web.AppRunner(health_application(state), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', config.PORT).start()
-    print('[APP] build=v12-startup-fix', flush=True)
+    print('[APP] build=v13-balance-keepalive', flush=True)
     print('[APP] health server bound; starting dependencies', flush=True)
     repo = None
     worker = None
@@ -60,6 +83,7 @@ async def main():
     polling = None
     heartbeat = None
     stop_waiter = None
+    keepalive = None
     try:
         config.validate_startup()
         repo = Repository(config.MONGO_URI, config.DB_NAME)
@@ -77,6 +101,21 @@ async def main():
             await wait_or_shutdown(shutdown, 3)
         if shutdown.is_set():
             return
+        # Auto-reseed placeholder account credentials from env (first deploy may
+        # have seeded MongoDB from template values; a real env value wins then).
+        def _bad(v):
+            v = (v or '').replace(' ', '')
+            return (not v) or '...' in v or '"uid":0' in v
+        for _key, _envkey in (('real_account', 'PO_SSID_REAL'),
+                              ('demo_account', 'PO_SSID_DEMO')):
+            _env_val = os.getenv(_envkey, '').strip().strip("'\"")
+            if _bad(repo.doc[_key].get('ssid')) and _env_val and not _bad(_env_val):
+                try:
+                    await repo.update({_key + '.ssid': _env_val})
+                    print(f'[APP] seeded {_key} credentials from environment', flush=True)
+                except Exception:
+                    pass
+
         worker = TradingWorker(repo)
         bot = Bot(token=config.CONTROL_BOT_TOKEN)
         dp = build_dispatcher(repo, worker, bot)
@@ -102,6 +141,10 @@ async def main():
         polling = asyncio.create_task(dp.start_polling(bot, handle_signals=False,
                                                        close_bot_session=False))
         stop_waiter = asyncio.create_task(shutdown.wait())
+        ka_url = os.getenv('RENDER_EXTERNAL_URL', '').strip().rstrip('/')
+        if ka_url:
+            keepalive = asyncio.create_task(keep_alive(ka_url, shutdown))
+            print('[APP] keep-alive enabled for', ka_url, flush=True)
         state.update(phase='ready', ready=True)
         print('[APP] controller ready; trading remains OFF until administrator presses Start', flush=True)
         done, _ = await asyncio.wait([polling, stop_waiter], return_when=asyncio.FIRST_COMPLETED)
@@ -120,8 +163,8 @@ async def main():
         shutdown.set()
         if worker:
             await worker.close()
-        for task in (polling, heartbeat, stop_waiter):
-            if task and not task.done():
+        for task in (polling, heartbeat, stop_waiter, keepalive):
+            if task is not None and not task.done():
                 task.cancel()
             if task:
                 with suppress(asyncio.CancelledError, Exception):

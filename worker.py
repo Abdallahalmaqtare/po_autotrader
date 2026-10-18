@@ -271,6 +271,8 @@ class TradingWorker:
                         return
                     await asyncio.sleep(.1)
                 if self.po.balance is None:
+                    if getattr(self.po, 'saw_other_account_balance', False):
+                        raise SafeIssue('PO_ACCOUNT_MISMATCH')
                     raise SafeIssue('PO_BALANCE_MISSING')
                 self.stage = 'waiting_signal'
                 self.listener.drain_pending()
