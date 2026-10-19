@@ -68,6 +68,7 @@ def defaults():
     return {
         '_id': 'current_settings', 'schema_version': 1,
         'account_mode': config.ACCOUNT_TYPE,
+        'signal_source': {'username': config.SIGNAL_BOT_USERNAME.lstrip('@'), 'history': []},
         'demo_account': {'ssid': os.getenv('PO_SSID_DEMO', ''),
                          'ws_url': os.getenv('PO_WS_URL_DEMO', config.DEMO_URL),
                          'uid': int(os.getenv('PO_UID_DEMO', '0') or 0)},
@@ -109,9 +110,17 @@ def validate_document(doc):
 
 def patched(doc, fields):
     d = deepcopy(doc)
-    allowed = {'account_mode'} | {'trading.' + k for k in defaults()['trading']} | {
+    allowed = {'account_mode', 'signal_source.username', 'signal_source.history'} | {'trading.' + k for k in defaults()['trading']} | {
         f'{kind}_account.{key}' for kind in ('real', 'demo') for key in ('ssid', 'ws_url', 'uid')}
     for path, value in fields.items():
+        if path == 'signal_source.username':
+            from telegram_bootstrap import signal_username
+            value = signal_username(value)
+        elif path == 'signal_source.history':
+            from telegram_bootstrap import signal_username
+            if not isinstance(value, list) or len(value) > 12:
+                raise ValueError('قائمة المصادر غير صالحة')
+            value = [signal_username(v) for v in value]
         if path not in allowed:
             raise ValueError('حقل إعداد غير مسموح')
         parts = path.split('.')

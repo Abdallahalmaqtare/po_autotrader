@@ -38,7 +38,7 @@ def health_application(state):
 async def keep_alive(public_url, shutdown):
     """Self-ping /health so the Render free instance counts inbound traffic and
     does not spin down. Interval via KEEP_ALIVE_SECONDS (default 600s, safely
-    under Render's 15-minute idle limit). Best-effort aid; paid plan is the guarantee."""
+    under Render's 15-minute idle limit). Best-effort aid only; not an uptime guarantee."""
     try:
         interval = max(60.0, float(os.getenv('KEEP_ALIVE_SECONDS', '600') or 600))
     except ValueError:
@@ -75,7 +75,7 @@ async def main():
     runner = web.AppRunner(health_application(state), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', config.PORT).start()
-    print('[APP] build=v15-stats-reset', flush=True)
+    print('[APP] build=v16-order-id-sources', flush=True)
     print('[APP] health server bound; starting dependencies', flush=True)
     repo = None
     worker = None

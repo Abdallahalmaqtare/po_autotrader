@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest
 import config
 from cloud_settings import MODES, DURATIONS, valid_number, valid_url, auth_frame
 from forex_assets import FOREX_OTC, SYMBOL_NAMES
+from telegram_bootstrap import signal_username
 
 
 class AdminOnly(BaseMiddleware):
@@ -30,6 +31,7 @@ class Input(StatesGroup):
     credential = State()
     url = State()
     number = State()
+    signal_source = State()
 
 
 def kb(rows):
@@ -47,6 +49,7 @@ def home():
 
 def settings_kb():
     return kb([[('👤 إدارة الحسابات | Accounts', 'accounts')],
+               [('🤖 بوت مصدر الإشارات', 'source')],
                [('💱 أزواج فوركس OTC', 'assets:0')],
                [('💵 المبلغ الأساسي', 'amount'), ('🪜 التدبيل', 'mg')],
                [('⏱ مدة الصفقة', 'duration'), ('⚡ تأخير الدخول', 'number:entry_delay_seconds')],
@@ -55,6 +58,21 @@ def settings_kb():
                [('💰 انتظار الرصيد', 'number:balance_settle_seconds'),
                 ('🔍 إعادة فحص الخسارة', 'number:loss_recheck_seconds')],
                [('⬅️ الرئيسية', 'home')]])
+
+
+def sources_kb(repo):
+    source = repo.doc.get('signal_source', {})
+    names = [source.get('username', config.SIGNAL_BOT_USERNAME)] + source.get('history', [])
+    seen, rows = set(), []
+    for name in names:
+        try:
+            value = signal_username(name)
+        except Exception:
+            continue
+        if value.lower() not in seen:
+            rows.append([('@'+value, 'source_pick:'+value)])
+            seen.add(value.lower())
+    return kb(rows + [[('✍️ إضافة / تغيير اليوزر', 'source_edit')], [('⬅️ الإعدادات', 'settings')]])
 
 
 def accounts_kb():
@@ -87,6 +105,7 @@ def report(repo, worker):
     return (f"📊 تقرير الأداء — {d['account_mode']}\n"
             f"الحالة: {'شغال 🟢' if worker.running else 'متوقف 🔴'}\n"
             f"الزوج: {t['asset']} | المدة: {t['duration_seconds']}s\n"
+            f"مصدر الإشارات: @{d.get('signal_source', {}).get('username', config.SIGNAL_BOT_USERNAME)}\n"
             f"الأساس: ${t['trade_amount']:g} | مستويات التدبيل: {t['martingale_steps']}\n"
             '───────────────────────\n'
             '📈 الصفقات والنتائج:\n'
@@ -105,7 +124,7 @@ def report(repo, worker):
             f"• إجمالي المفقود في السلاسل المستنفدة: ${s['lost_amount']:.2f}\n"
             f"• الرصيد الحالي للحساب: {bal}\n"
             'التقرير مستقل لكل حساب ومحفوظ عبر إعادة التشغيل.\n'
-            'المبالغ استدلال من الرصيد وليست كشف حساب رسمي؛ الأوامر غير المحسومة لا تُحسب خسائر.')
+            'الحساب المالي للنتائج ذات الربح الصريح المرتبطة بمعرّف صفقة؛ النتائج غير المحسومة لا تُحسب خسائر.')
 
 
 async def panel(bot, cb, text, markup):
@@ -174,6 +193,7 @@ def build_dispatcher(repo, worker, bot):
                         f"WebSocket: {'متصل' if worker.po and worker.po.connected else 'غير متصل'}\n"
                         f"MongoDB writer: {'فعال' if repo.leader else 'غير فعال'}\n"
                         f"الزوج: {repo.doc['trading']['asset']}\n"
+                        f"مصدر الإشارات: @{repo.doc.get('signal_source', {}).get('username', config.SIGNAL_BOT_USERNAME)}\n"
                         f"آخر كود خطأ: {worker.last_error or 'لا يوجد'}\n"
                         'البيانات السرية لا تظهر في اللوحة.')
                 if worker.diagnostic:
@@ -182,6 +202,17 @@ def build_dispatcher(repo, worker, bot):
                 return await panel(bot, cb, text, kb(rows) if rows else home())
             if action == 'settings':
                 return await panel(bot, cb, '⚙️ الإعدادات؛ التغييرات العادية تسري من الدورة القادمة.', settings_kb())
+            if action == 'source':
+                current = repo.doc.get('signal_source', {}).get('username', config.SIGNAL_BOT_USERNAME)
+                return await panel(bot, cb, '🤖 المصدر الحالي: @'+current+
+                                   '\nاختر بوتاً محفوظاً أو أضف يوزراً جديداً. لا نضغط Start في المصدر نيابة عنك.', sources_kb(repo))
+            if action == 'source_edit':
+                await state.set_state(Input.signal_source)
+                return await panel(bot, cb, 'أرسل @username الخاص ببوت الإشارات أو رابط t.me مباشر. '
+                                   'سنفحص أنه بوت قبل حفظه. /cancel للإلغاء.', None)
+            if action.startswith('source_pick:'):
+                text = await worker.change_signal_source(action.split(':',1)[1])
+                return await panel(bot, cb, text, sources_kb(repo))
             if action == 'accounts':
                 return await panel(bot, cb, f"👤 الحساب الحالي: {repo.doc['account_mode']}\nلا تُعرض قيم SSID.", accounts_kb())
             if action == 'real_confirm':
@@ -242,6 +273,18 @@ def build_dispatcher(repo, worker, bot):
             # Never echo raw exceptions containing Mongo URI/session/WS payloads.
             await bot.send_message(config.ADMIN_TELEGRAM_ID,
                 f'تعذّرت العملية ({type(e).__name__}). لم يُؤكّد نجاح التغيير؛ راجع الحالة.', reply_markup=home())
+
+    @dp.message(Input.signal_source)
+    async def source_input(msg: Message, state: FSMContext):
+        try:
+            value = signal_username(msg.text or '')
+            text = await worker.change_signal_source(value)
+            await state.clear()
+            await msg.answer(text, reply_markup=sources_kb(repo))
+        except ValueError as exc:
+            await msg.answer(str(exc))
+        except Exception:
+            await msg.answer('تعذّر اعتماد المصدر. تحقق من اليوزر وأن حساب الجلسة يستطيع فتح البوت. لم يتغير المصدر المحفوظ.')
 
     @dp.message(Input.credential)
     async def credential(msg: Message, state: FSMContext):

@@ -1,0 +1,34 @@
+{
+  "worker.py": {
+    "original_sha256": "92ef947b4051e8e69f32f8d94a3b375914ff3c60a7cbdf0c5e13e467cde5fe5a",
+    "new_sha256": "3c06776de4c0e2e015cc85defbb33fdbe0608f0d1b5129da2cbcbc5e7016a665"
+  },
+  "order_tracking.py": {
+    "original_sha256": null,
+    "new_sha256": "fa72d63ccbeae04b34928f060ba8e12ed68054dc4816c648ff262d8e232bad61"
+  },
+  "telegram_signal.py": {
+    "original_sha256": "ec8f0011ac830ba60123c0e57b74f980033f9e997d41f9cba50c291f81f6c5a8",
+    "new_sha256": "8b694aeaf51e9b77b7a21dd7efba5505f7a285d0796a8099f5bc216f24caf8a7"
+  },
+  "cloud_settings.py": {
+    "original_sha256": "dc0c9faa3432e5e787f317f39ee0df6b814bf390e413a45b8aae7cf490e24574",
+    "new_sha256": "a4f3af6a4854b1f830e81c47b4b973948ec640766a91935db271114a11aaf407"
+  },
+  "database.py": {
+    "original_sha256": "8036a3bf3bf94be3dc38bc59a88da7e6eca06df300b51c992e65f1f14c80fdde",
+    "new_sha256": "8d12f83d09f72b21dbd3391a22b6d6ed535d6cb5dfeaf6244a71c4760f3640b4"
+  },
+  "run.py": {
+    "original_sha256": "e6c5995fe808f4ee288eb480ed7afeaed240c970e1b49a2e1e2a72f5ed4c8920",
+    "new_sha256": "1f051348130d3dd459dbe1d901c2dc6a13c4f0508fb57ea2a7a90b0dd5f8d0ba"
+  },
+  "cloud_transport.py": {
+    "original_sha256": "0c57703b88120b347b175bd12af6dbebd277e57c13df8ea497bece65b40a00c6",
+    "new_sha256": "2a0194dc489bd8e47ee4dd532e5825f496593fe13e129af7d5af98882f3d20ee"
+  },
+  "control_bot.py": {
+    "original_sha256": "10fee05f8bf1813fc22aa3ec07979cc638579aed61ff853130ad5a1bbd1c2f38",
+    "new_sha256": "2bf4a7293be23362929f88fe37e214e2232a02980f5dbf713fc2fabc02cda352"
+  }
+}
