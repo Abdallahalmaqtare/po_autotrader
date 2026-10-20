@@ -27,5 +27,11 @@
     "mode": "TRADITIONAL",
     "profit_limit": 50.0,
     "loss_limit": 50.0
+  },
+  "recovery": {
+    "mode": "TRADITIONAL",
+    "increment": 1.0,
+    "exit_mode": "RECOVER_LOSS",
+    "win_target": 3
   }
 }

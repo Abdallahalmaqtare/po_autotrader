@@ -16,6 +16,7 @@ from telegram_signal import SignalListener
 from telegram_bootstrap import session_from_env, signal_username
 from diagnostics import SafeIssue, diagnose_exception
 from risk_limits import risk_state, limit_stop_text
+from recovery import sizing, selected_state
 
 
 class TradingWorker:
@@ -278,14 +279,18 @@ class TradingWorker:
                     print('[WORKER] stale pending marker auto-archived; continuing', flush=True)
                 mode = self.repo.doc['account_mode']
                 t = deepcopy(self.repo.doc['trading'])
+                recovery_policy = deepcopy(self.repo.doc['recovery'])
+                effective_base, recovery_context = sizing(self.repo.doc, mode)
                 self.apply_snapshot(mode, t)
-                sig = (mode, t['asset'], t['trade_amount'], t['martingale_steps'])
+                sig = (mode, t['asset'], effective_base, t['martingale_steps'])
+                if recovery_context['enabled']:
+                    sig += (recovery_context['epoch'],)
                 if sig != signature:
                     # New sizing/pair/account starts a fresh ladder, not an old oversized order.
                     saved = self.repo.doc['runtime'].get('sizing_signature')
                     if signature is not None or (saved is not None and list(sig) != saved):
                         await self.repo.reset_step()
-                    mm = MoneyManager(t['trade_amount'], t['martingale_steps'])
+                    mm = MoneyManager(effective_base, t['martingale_steps'])
                     mm.step = int(self.repo.doc['runtime'].get('martingale_step', 0))
                     signature = sig
                     chain_stake = 0.0
@@ -324,7 +329,9 @@ class TradingWorker:
                 if self.stop_event.is_set():
                     break
                 # Changes received while waiting invalidate this old signal.
-                if t != self.repo.doc['trading'] or mode != self.repo.doc['account_mode']:
+                if (t != self.repo.doc['trading'] or mode != self.repo.doc['account_mode']
+                        or recovery_policy != self.repo.doc['recovery']
+                        or recovery_context['epoch'] != selected_state(self.repo.doc, mode)['epoch']):
                     continue
                 if not self.po.connected:
                     continue  # fresh connection needs a fresh signal, not a replay
@@ -332,7 +339,8 @@ class TradingWorker:
                     break
                 order = dict(id=uuid4().hex, mode=mode, amount=mm.current_amount(),
                              asset=t['asset'], direction=direction,
-                             created_at=time.time(), step=mm.step, sizing_signature=list(sig))
+                             created_at=time.time(), step=mm.step, sizing_signature=list(sig),
+                             recovery_context=deepcopy(recovery_context))
                 if order['amount'] > self.po.balance:
                     raise SafeIssue('INSUFFICIENT_BALANCE')
                 # Persist BEFORE send: redeploy must never automatically repeat an uncertain order.

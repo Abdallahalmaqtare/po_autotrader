@@ -48,6 +48,12 @@ def text_chunks(text, max_units=3900):
 
 def card_for(action, text=''):
     action = action or 'home'
+    if action.startswith('recovery'):
+        return 'setup'
+    if action == 'timing':
+        return 'setup'
+    if action == 'tools':
+        return 'diagnostic'
     if action in ('limits',) or action.startswith(('risk:', 'limit:')):
         return 'limits'
     if action.startswith('reset'):

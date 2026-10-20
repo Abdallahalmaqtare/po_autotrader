@@ -6,6 +6,7 @@ from uuid import uuid4
 from pymongo import AsyncMongoClient, ReturnDocument
 from pymongo.write_concern import WriteConcern
 from cloud_settings import defaults, validate_document, patched, empty_stats, MODES
+from recovery import after_result, selected_state, reset_state, recovery_defaults
 
 
 def utcnow():
@@ -93,7 +94,22 @@ class Repository:
     async def update(self, fields):
         async with self.lock:
             new_doc = patched(self.doc, fields)
-            r = await self.collection.update_one(self.fence(), {'$set': fields})
+            writes = deepcopy(fields)
+            # Settings edits never overwrite finances. New sizing / recovery policy
+            # explicitly cancels old recovery phases; old in-flight epochs cannot revive them.
+            reset_all = (new_doc['recovery'] != self.doc['recovery'] or
+                         new_doc['trading']['trade_amount'] != self.doc['trading']['trade_amount'])
+            credential_modes = {mode for mode, key in (('REAL','real_account'), ('PRACTICE','demo_account'))
+                                if new_doc[key] != self.doc[key]}
+            reset_modes = set(MODES) if reset_all else credential_modes
+            if reset_modes:
+                for mode in reset_modes:
+                    value = reset_state(selected_state(self.doc, mode))
+                    writes['runtime.recovery.' + mode] = value
+                    new_doc['runtime']['recovery'][mode] = value
+                writes.update({'runtime.martingale_step': 0, 'runtime.sizing_signature': None})
+                new_doc['runtime'].update(martingale_step=0, sizing_signature=None)
+            r = await self.collection.update_one(self.fence(), {'$set': writes})
             if r.matched_count != 1:
                 raise RuntimeError('lease_lost')
             # DB first: a failed write is never reported as a saved setting.
@@ -137,11 +153,21 @@ class Repository:
         if inc:
             update['$inc'] = inc
         async with self.lock:
+            previous = selected_state(self.doc, mode)
+            current = previous
+            if dispatched:
+                current = after_result(self.doc.get('recovery', recovery_defaults()), previous,
+                                       order, result, before, after, seq_lost)
+            changed_phase = current['epoch'] != previous['epoch']
+            effective_step = 0 if changed_phase else next_step
+            update['$set']['runtime.martingale_step'] = effective_step
+            update['$set']['runtime.recovery.' + mode] = current
             r = await self.collection.update_one(q, update)
             if r.matched_count != 1:
                 raise RuntimeError('result_already_saved_or_lease_lost')
-            self.doc['runtime'].update(pending=None, martingale_step=next_step,
+            self.doc['runtime'].update(pending=None, martingale_step=effective_step,
                                        sizing_signature=order.get('sizing_signature'))
+            self.doc['runtime'].setdefault('recovery', {})[mode] = current
             for path, v in inc.items():
                 parts = path.split('.')
                 node = self.doc
@@ -167,13 +193,15 @@ class Repository:
         async with self.lock:
             update = {'$set': {'session_stats': empty_stats(),
                                'account_stats': {m: empty_stats() for m in MODES},
-                               'runtime.martingale_step': 0}}
+                               'runtime.martingale_step': 0,
+                               'runtime.recovery': {m: reset_state(selected_state(self.doc, m)) for m in MODES}}}
             r = await self.collection.update_one(self.fence(), update)
             if r.matched_count != 1:
                 raise RuntimeError('lease_lost')
             self.doc['session_stats'] = empty_stats()
             self.doc['account_stats'] = {m: empty_stats() for m in MODES}
             self.doc['runtime']['martingale_step'] = 0
+            self.doc['runtime']['recovery'] = deepcopy(update['$set']['runtime.recovery'])
 
     async def close(self):
         if self.client:

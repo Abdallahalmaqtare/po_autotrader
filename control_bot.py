@@ -13,6 +13,8 @@ from forex_assets import FOREX_OTC, SYMBOL_NAMES
 from account_details import account_text
 from risk_limits import risk_summary
 from branded_ui import get_panels
+from recovery import recovery_text, short_summary
+from compact_stats import compact_report
 
 
 class AdminOnly(BaseMiddleware):
@@ -34,6 +36,7 @@ class Input(StatesGroup):
     url = State()
     number = State()
     limit = State()
+    recovery_number = State()
 
 
 def kb(rows):
@@ -42,25 +45,46 @@ def kb(rows):
 
 
 def home():
-    return kb([[('▶️ بدء التداول | Start', 'start'), ('⏹️ إيقاف | Stop', 'stop')],
-               [('⚙️ الإعدادات | Settings', 'settings')],
-               [('📊 الإحصائيات | Stats', 'stats'), ('🔄 الحالة | Status', 'status')],
-               [('🛡 حدود الربح والخسارة', 'limits')],
-               [('🧪 فحص الاتصال دون تداول', 'diagnose')],
-               [('🗑 تصفير السجل | Reset Stats', 'reset_stats')]])
+    return kb([[('▶️ بدء التداول', 'start'), ('⏹ إيقاف التداول', 'stop')],
+               [('📊 الإحصائيات', 'stats'), ('🔄 الحالة', 'status')],
+               [('⚙️ الإعدادات', 'settings'), ('👤 الحسابات', 'accounts')],
+               [('🛟 التعزيز', 'recovery'), ('🛡 الحدود', 'limits')],
+               [('🧰 الأدوات والصيانة', 'tools')]])
+
+
+def stats_kb():
+    return kb([[('🔄 تحديث', 'stats'), ('🗑 تصفير', 'reset_stats')],
+               [('🏠 الرئيسية', 'home')]])
+
+
+def tools_kb():
+    return kb([[('🧪 فحص الاتصال', 'diagnose')], [('🗑 تصفير السجل', 'reset_stats')],
+               [('🏠 الرئيسية', 'home')]])
 
 
 def settings_kb():
-    return kb([[('👤 إدارة الحسابات | Accounts', 'accounts')],
-               [('🛡 وضع التشغيل والحدود', 'limits')],
-               [('💱 أزواج فوركس OTC', 'assets:0')],
-               [('💵 المبلغ الأساسي', 'amount'), ('🪜 التدبيل', 'mg')],
-               [('⏱ مدة الصفقة', 'duration'), ('⚡ تأخير الدخول', 'number:entry_delay_seconds')],
-               [('⏳ الفاصل بين الدورات', 'number:loop_delay_seconds')],
-               [('⌛ مهلة النتيجة الإضافية', 'number:result_timeout_extra')],
-               [('💰 انتظار الرصيد', 'number:balance_settle_seconds'),
-                ('🔍 إعادة فحص الخسارة', 'number:loss_recheck_seconds')],
-               [('⬅️ الرئيسية', 'home')]])
+    return kb([[('💱 زوج التداول', 'assets:0'), ('⏱ المدة', 'duration')],
+               [('💵 المبلغ الأساسي', 'amount'), ('🪜 مستويات التدبيل', 'mg')],
+               [('🛟 التعزيز', 'recovery'), ('🛡 حدود الربح والخسارة', 'limits')],
+               [('⚡ التوقيتات المتقدمة', 'timing')],
+               [('👤 إدارة الحسابات', 'accounts'), ('🏠 الرئيسية', 'home')]])
+
+
+def timing_kb():
+    return kb([[('⚡ تأخير الدخول', 'number:entry_delay_seconds'),
+                ('⏳ فاصل الدورات', 'number:loop_delay_seconds')],
+               [('⌛ مهلة النتيجة', 'number:result_timeout_extra'),
+                ('💰 انتظار الرصيد', 'number:balance_settle_seconds')],
+               [('🔍 إعادة فحص الخسارة', 'number:loss_recheck_seconds')],
+               [('⬅️ الإعدادات', 'settings')]])
+
+
+def recovery_kb():
+    return kb([[('◻️ تقليدي', 'recovery:mode:TRADITIONAL'),
+                ('🛟 تفعيل التعزيز', 'recovery:mode:ENABLED')],
+               [('💵 زيادة الأساس', 'recovery_increment'), ('🎯 طريقة الرجوع', 'recovery_exit')],
+               [('🏆 عدد الانتصارات', 'recovery_wins')],
+               [('⬅️ الإعدادات', 'settings'), ('🏠 الرئيسية', 'home')]])
 
 
 def limits_kb():
@@ -101,39 +125,7 @@ def assets_kb(page):
 
 
 def report(repo, worker):
-    d = repo.doc
-    s = d['account_stats'][d['account_mode']]
-    t = d['trading']
-    settled = s['won_trades'] + s['lost_trades']
-    rate = s['won_trades']/settled*100 if settled else 0
-    bal = f'${worker.balance:.2f}' if worker.balance is not None else 'غير متاح'
-    pending = 1 if worker.pending else 0
-    net = s['net_pnl']
-    net_s = f"+${net:.2f} 🟢" if net >= 0 else f"-${abs(net):.2f} 🔴"
-    return (f"📊 تقرير الأداء — {d['account_mode']}\n"
-            + account_text(d, worker.po) + risk_summary(d) +
-
-            f"الحالة: {'شغال 🟢' if worker.running else 'متوقف 🔴'}\n"
-            f"الزوج: {t['asset']} | المدة: {t['duration_seconds']}s\n"
-            f"الأساس: ${t['trade_amount']:g} | مستويات التدبيل: {t['martingale_steps']}\n"
-            '───────────────────────\n'
-            '📈 الصفقات والنتائج:\n'
-            f"• إجمالي الصفقات المنفذة: {s['total_trades']}\n"
-            f"• رابحة (WON): {s['won_trades']}\n"
-            f"• خاسرة (LOST): {s['lost_trades']}\n"
-            f"• تعادل (DRAW): {s['draws']}\n"
-            f"• خاسرة بعد استنفاد التدبيلات (سلسلة كاملة): {s['sequence_losses']}\n"
-            f"• غير مؤكدة: {s['unconfirmed']} | معلّقة: {pending}\n"
-            f"• نسبة النجاح (Win Rate): {rate:.1f}%\n"
-            '───────────────────────\n'
-            '💰 التقرير المالي (بمفهوم المنصة):\n'
-            f"• العائد (إجمالي مبالغ الدخول): ${s['total_staked']:.2f}\n"
-            f"• العوائد المستلمة: ${s['total_returned']:.2f}\n"
-            f"• الربح / الخسارة الصافية: {net_s}\n"
-            f"• إجمالي المفقود في السلاسل المستنفدة: ${s['lost_amount']:.2f}\n"
-            f"• الرصيد الحالي للحساب: {bal}\n"
-            'التقرير مستقل لكل حساب ومحفوظ عبر إعادة التشغيل.\n'
-            'المبالغ استدلال من الرصيد وليست كشف حساب رسمي؛ الأوامر غير المحسومة لا تُحسب خسائر.')
+    return compact_report(repo, worker)
 
 
 async def panel(bot, cb, text, markup):
@@ -191,7 +183,7 @@ def build_dispatcher(repo, worker, bot):
                 return await panel(bot, cb, '✅ تم تصفير السجل بالكامل. التداول متوقف — اضغط Start للبدء من جديد.',
                                    home())
             if action == 'stats':
-                return await panel(bot, cb, report(repo, worker), home())
+                return await panel(bot, cb, report(repo, worker), stats_kb())
             if action == 'diagnose':
                 text = await worker.diagnose()
                 return await panel(bot, cb, text, home())
@@ -207,6 +199,53 @@ def build_dispatcher(repo, worker, bot):
                     text += '\n\n' + worker.diagnostic.public_text()
                 rows = [[('🔍 مراجعة الأمر المعلّق', 'review')], [('⬅️ الرئيسية', 'home')]] if worker.pending else None
                 return await panel(bot, cb, text, kb(rows) if rows else home())
+            if action == 'tools':
+                return await panel(bot, cb, '🧰 الأدوات والصيانة', tools_kb())
+            if action == 'timing':
+                return await panel(bot, cb, '⚡ التوقيتات المتقدمة', timing_kb())
+            if action == 'recovery':
+                return await panel(bot, cb, recovery_text(repo.doc), recovery_kb())
+            if action.startswith('recovery:mode:'):
+                mode = action.split(':')[2]
+                if mode not in ('TRADITIONAL', 'ENABLED'):
+                    raise ValueError('وضع تعزيز غير صالح')
+                await worker.change({'recovery.mode': mode})
+                return await panel(bot, cb, recovery_text(repo.doc), recovery_kb())
+            if action == 'recovery_increment':
+                return await panel(bot, cb, '💵 الزيادة فوق المبلغ الأساسي', kb([
+                    [(f'+${v}', f'recovery:value:increment:{v}') for v in (1,2,3)],
+                    [(f'+${v}', f'recovery:value:increment:{v}') for v in (4,5)],
+                    [('✍️ زيادة مخصصة', 'recovery:edit:increment')], [('⬅️ التعزيز', 'recovery')]]))
+            if action == 'recovery_exit':
+                return await panel(bot, cb, '🎯 الرجوع للمبلغ الأساسي بعد:', kb([
+                    [('💰 تعويض صافي الخسارة', 'recovery:exit:RECOVER_LOSS')],
+                    [('🏆 عدد انتصارات محدد', 'recovery:exit:WINS')], [('⬅️ التعزيز', 'recovery')]]))
+            if action.startswith('recovery:exit:'):
+                value = action.split(':')[2]
+                if value not in ('RECOVER_LOSS', 'WINS'):
+                    raise ValueError('طريقة رجوع غير صالحة')
+                await worker.change({'recovery.exit_mode': value})
+                return await panel(bot, cb, recovery_text(repo.doc), recovery_kb())
+            if action == 'recovery_wins':
+                return await panel(bot, cb, '🏆 عدد الصفقات الرابحة أثناء التعزيز', kb([
+                    [(str(v), f'recovery:value:win_target:{v}') for v in (1,2,3)],
+                    [(str(v), f'recovery:value:win_target:{v}') for v in (4,5)],
+                    [('✍️ عدد مخصص', 'recovery:edit:win_target')], [('⬅️ التعزيز', 'recovery')]]))
+            if action.startswith('recovery:value:'):
+                _, _, key, raw = action.split(':')
+                if key not in ('increment', 'win_target'):
+                    raise ValueError('خيار تعزيز غير صالح')
+                value = int(raw) if key == 'win_target' else valid_number(raw, .01, 100000)
+                await worker.change({'recovery.'+key: value})
+                return await panel(bot, cb, recovery_text(repo.doc), recovery_kb())
+            if action.startswith('recovery:edit:'):
+                key = action.split(':')[2]
+                if key not in ('increment', 'win_target'):
+                    raise ValueError('خيار تعزيز غير صالح')
+                await state.set_state(Input.recovery_number)
+                await state.update_data(key=key)
+                prompt = 'أرسل عدد الانتصارات (1–1000).' if key == 'win_target' else 'أرسل الزيادة بالدولار فوق المبلغ الأساسي.'
+                return await panel(bot, cb, prompt + '\n/cancel للإلغاء', None)
             if action == 'settings':
                 return await panel(bot, cb, '⚙️ الإعدادات؛ التغييرات العادية تسري من الدورة القادمة.', settings_kb())
             if action == 'accounts':
@@ -335,6 +374,27 @@ def build_dispatcher(repo, worker, bot):
             await ui.show('أدخل مبلغاً موجباً بين 0.01 و1000000 أو /cancel.', view='limits')
         except Exception as exc:
             await ui.show('لم يُؤكد الحفظ: ' + type(exc).__name__, limits_kb(), view='limits')
+
+    @dp.message(Input.recovery_number)
+    async def recovery_input(msg: Message, state: FSMContext):
+        try:
+            data = await state.get_data()
+            key = data.get('key')
+            if key not in ('increment', 'win_target'):
+                raise ValueError('خيار تعزيز غير صالح')
+            value = valid_number(msg.text or '', 1 if key == 'win_target' else .01,
+                                 1000 if key == 'win_target' else 100000)
+            if key == 'win_target':
+                if not value.is_integer():
+                    raise ValueError('عدد الانتصارات يجب أن يكون صحيحاً')
+                value = int(value)
+            await worker.change({'recovery.'+key: value})
+            await state.clear()
+            await ui.show(recovery_text(repo.doc), recovery_kb(), view='recovery')
+        except (ValueError, TypeError):
+            await ui.show('قيمة غير صالحة؛ أرسل رقماً ضمن النطاق أو /cancel.', view='recovery')
+        except Exception as exc:
+            await ui.show('تعذّر الحفظ: '+type(exc).__name__, recovery_kb(), view='recovery')
 
     @dp.message(Input.number)
     async def number_input(msg: Message, state: FSMContext):

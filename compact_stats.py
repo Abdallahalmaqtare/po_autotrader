@@ -1,0 +1,38 @@
+"""Owner-facing compact report: values only, no setup tutorial or repeated hints."""
+from account_details import account_identity
+from risk_limits import risk_state
+from recovery import short_summary, selected_state
+
+
+def compact_report(repo, worker):
+    d = repo.doc
+    s = d['account_stats'][d['account_mode']]
+    t = d['trading']
+    identity = account_identity(d, worker.po)
+    settled = s['won_trades'] + s['lost_trades']
+    rate = s['won_trades'] / settled * 100 if settled else 0
+    balance = f'${worker.balance:,.2f}' if worker.balance is not None else '—'
+    risk = risk_state(d)
+    limits = 'تقليدي' if risk['mode'] == 'TRADITIONAL' else f"ربح ${risk['profit_limit']:g} / خسارة ${risk['loss_limit']:g}"
+    lines = ['📊 إحصائيات التداول',
+             f"{'🟢 يعمل' if worker.running else '🔴 متوقف'} | {d['account_mode']} | UID: {identity['uid'] or '—'}",
+             f"💱 {t['asset']} | ⏱ {t['duration_seconds']}ث | أساس ${t['trade_amount']:g}",
+             '━━━━━━━━━━━━━━━━',
+             f"الصفقات: {s['total_trades']:,} | النجاح: {rate:.1f}%",
+             f"رابحة: {s['won_trades']:,} | خاسرة: {s['lost_trades']:,} | تعادل: {s['draws']:,}",
+             f"سلاسل مستنفدة: {s['sequence_losses']:,} | خسارتها: ${s['lost_amount']:,.2f}",
+             '━━━━━━━━━━━━━━━━',
+             f"مبالغ الدخول: ${s['total_staked']:,.2f}",
+             f"العوائد المستلمة: ${s['total_returned']:,.2f}",
+             f"صافي الربح / الخسارة: ${s['net_pnl']:+,.2f}",
+             f'الرصيد: {balance}',
+             short_summary(d), f'🛡 الحدود: {limits}']
+    notes = []
+    if s.get('unconfirmed') or worker.pending:
+        notes.append(f"غير مؤكدة: {s.get('unconfirmed',0)} | معلّقة: {int(bool(worker.pending))}")
+    state = selected_state(d)
+    if state['active'] and state.get('uncertain'):
+        notes.append('التعزيز يحتوي نتائج غير مؤكدة.')
+    if notes:
+        lines += ['⚠️ ' + ' · '.join(notes)]
+    return '\n'.join(lines)
