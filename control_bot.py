@@ -12,6 +12,7 @@ from cloud_settings import MODES, DURATIONS, valid_number, valid_url, auth_frame
 from forex_assets import FOREX_OTC, SYMBOL_NAMES
 from account_details import account_text
 from risk_limits import risk_summary
+from branded_ui import get_panels
 
 
 class AdminOnly(BaseMiddleware):
@@ -89,9 +90,13 @@ def accounts_kb():
 def assets_kb(page):
     total = math.ceil(len(FOREX_OTC)/6)
     page = max(0, min(page, total-1))
-    rows = [[(name, 'asset:'+symbol)] for name, symbol in FOREX_OTC[page*6:page*6+6]]
-    rows += [[('<', f'assets:{page-1}'), (f'{page+1}/{total}', 'noop'), ('>', f'assets:{page+1}')],
-             [('⬅️ الإعدادات', 'settings')]]
+    entries = FOREX_OTC[page*6:page*6+6]
+    rows = [[(name, 'asset:'+symbol) for name, symbol in entries[i:i+2]]
+            for i in range(0, len(entries), 2)]
+    rows += [[('<' if page > 0 else '·', f'assets:{page-1}' if page > 0 else 'noop'),
+              (f'{page+1}/{total}', 'noop'),
+              ('>' if page < total-1 else '·', f'assets:{page+1}' if page < total-1 else 'noop')],
+             [('Back', 'settings')]]
     return kb(rows)
 
 
@@ -132,17 +137,14 @@ def report(repo, worker):
 
 
 async def panel(bot, cb, text, markup):
-    try:
-        await cb.message.edit_text(text, reply_markup=markup)
-    except TelegramBadRequest:
-        # e.g. double-clicked unchanged menu. Do not let a UI no-op stop polling.
-        await bot.send_message(config.ADMIN_TELEGRAM_ID, text, reply_markup=markup)
+    return await get_panels(bot).show(text, markup, view=cb.data or 'home', origin=cb.message)
 
 
 def build_dispatcher(repo, worker, bot):
     dp = Dispatcher()
+    ui = get_panels(bot)
     async def notify_diagnostic(text):
-        await bot.send_message(config.ADMIN_TELEGRAM_ID, '🔔 إشعار البوت\n' + text)
+        await ui.notice('🔔 إشعار البوت\n' + text)
     worker.notify = notify_diagnostic
     dp.message.outer_middleware(AdminOnly())
     dp.callback_query.outer_middleware(AdminOnly())
@@ -150,12 +152,12 @@ def build_dispatcher(repo, worker, bot):
     @dp.message(CommandStart())
     async def start_panel(msg: Message, state: FSMContext):
         await state.clear()
-        await msg.answer('🎛 لوحة تحكم التداول — لا يبدأ التداول تلقائياً بعد الإقلاع.', reply_markup=home())
+        await ui.show('🎛 لوحة تحكم عبود Trading Controller\nلا يبدأ التداول تلقائياً بعد الإقلاع.', home(), view='home')
 
     @dp.message(Command('cancel'))
     async def cancel(msg: Message, state: FSMContext):
         await state.clear()
-        await msg.answer('أُلغي الإدخال.', reply_markup=settings_kb())
+        await ui.show('أُلغي الإدخال.', settings_kb(), view='settings')
 
     @dp.callback_query()
     async def callback(cb: CallbackQuery, state: FSMContext):
@@ -243,7 +245,8 @@ def build_dispatcher(repo, worker, bot):
                 return await panel(bot, cb, f'أرسل إطار auth الكامل أو SSID لـ {mode}.\n'
                                    'سنحاول حذف رسالتك؛ لا تُرسل كلمة مرور حسابك. /cancel للإلغاء', None)
             if action.startswith('assets:'):
-                return await panel(bot, cb, '💱 فوركس OTC فقط', assets_kb(int(action.split(':')[1])))
+                page = max(0, min(4, int(action.split(':')[1])))
+                return await panel(bot, cb, f'Select an asset\nMarket: OTC\n\nChoose an asset:\n💱 الأزواج مطابقة للصور — الصفحة {page+1}/5', assets_kb(page))
             if action.startswith('asset:'):
                 text = await worker.change({'trading.asset': action.split(':')[1]})
                 return await panel(bot, cb, text, settings_kb())
@@ -278,11 +281,10 @@ def build_dispatcher(repo, worker, bot):
                 await repo.acknowledge_pending()
                 return await panel(bot, cb, 'تمت الأرشفة؛ يلزم ضغط Start للبدء من جديد.', home())
         except ValueError as e:
-            await bot.send_message(config.ADMIN_TELEGRAM_ID, str(e), reply_markup=settings_kb())
+            await ui.notice(str(e), settings_kb(), view='error')
         except Exception as e:
             # Never echo raw exceptions containing Mongo URI/session/WS payloads.
-            await bot.send_message(config.ADMIN_TELEGRAM_ID,
-                f'تعذّرت العملية ({type(e).__name__}). لم يُؤكّد نجاح التغيير؛ راجع الحالة.', reply_markup=home())
+            await ui.notice(f'تعذّرت العملية ({type(e).__name__}). لم يُؤكّد نجاح التغيير؛ راجع الحالة.', home(), view='error')
 
     @dp.message(Input.credential)
     async def credential(msg: Message, state: FSMContext):
@@ -295,11 +297,11 @@ def build_dispatcher(repo, worker, bot):
             key = 'real_account' if mode == 'REAL' else 'demo_account'
             frame = auth_frame(raw, mode, repo.doc[key].get('uid', 0))
         except (ValueError, KeyError) as e:
-            await msg.answer(str(e) if isinstance(e, ValueError) else 'أعد فتح إدارة الحسابات.')
+            await ui.show(str(e) if isinstance(e, ValueError) else 'أعد فتح إدارة الحسابات.', accounts_kb(), view='accounts')
             return
         await state.update_data(frame=frame)
         await state.set_state(Input.url)
-        await msg.answer('تم استلام الجلسة دون عرضها. أرسل رابط wss أو /skip لاعتماد الرابط الافتراضي لهذا الحساب.\n/cancel للإلغاء')
+        await ui.show('تم استلام الجلسة دون عرضها. أرسل رابط wss أو /skip لاعتماد الرابط الافتراضي لهذا الحساب.\n/cancel للإلغاء', view='accounts')
 
     @dp.message(Input.url)
     async def url(msg: Message, state: FSMContext):
@@ -311,12 +313,12 @@ def build_dispatcher(repo, worker, bot):
             text = await worker.change({key+'.ssid': data['frame'], key+'.ws_url': value},
                                        reconnect=repo.doc['account_mode'] == mode)
             await state.clear()
-            await msg.answer(text + '\n' + account_text(repo.doc, worker.po), reply_markup=accounts_kb())
+            await ui.show(text + '\n' + account_text(repo.doc, worker.po), accounts_kb(), view='accounts')
         except ValueError as e:
-            await msg.answer(str(e))
+            await ui.show(str(e), view='accounts')
         except Exception as e:
             await state.clear()
-            await msg.answer('لم يُؤكّد حفظ البيانات؛ حاول مجدداً. نوع الخطأ: '+type(e).__name__)
+            await ui.show('لم يُؤكّد حفظ البيانات؛ حاول مجدداً. نوع الخطأ: '+type(e).__name__, accounts_kb(), view='accounts')
 
     @dp.message(Input.limit)
     async def limit_input(msg: Message, state: FSMContext):
@@ -328,11 +330,11 @@ def build_dispatcher(repo, worker, bot):
             value = valid_number(msg.text or '', .01, 1000000)
             text = await worker.change({'risk.' + key: value})
             await state.clear()
-            await msg.answer(text + '\n\n' + limits_text(repo.doc), reply_markup=limits_kb())
+            await ui.show(text + '\n\n' + limits_text(repo.doc), limits_kb(), view='limits')
         except (ValueError, TypeError):
-            await msg.answer('أدخل مبلغاً موجباً بين 0.01 و1000000 أو /cancel.')
+            await ui.show('أدخل مبلغاً موجباً بين 0.01 و1000000 أو /cancel.', view='limits')
         except Exception as exc:
-            await msg.answer('لم يُؤكد الحفظ: ' + type(exc).__name__)
+            await ui.show('لم يُؤكد الحفظ: ' + type(exc).__name__, limits_kb(), view='limits')
 
     @dp.message(Input.number)
     async def number_input(msg: Message, state: FSMContext):
@@ -342,9 +344,9 @@ def build_dispatcher(repo, worker, bot):
                                  100000 if data['key'] == 'trade_amount' else 120)
             text = await worker.change({'trading.'+data['key']: value})
             await state.clear()
-            await msg.answer(text, reply_markup=settings_kb())
+            await ui.show(text, settings_kb(), view='setup')
         except (ValueError, TypeError):
-            await msg.answer('قيمة غير صالحة؛ أدخل رقماً ضمن النطاق أو /cancel.')
+            await ui.show('قيمة غير صالحة؛ أدخل رقماً ضمن النطاق أو /cancel.', view='setup')
         except Exception as e:
-            await msg.answer('تعذّر الحفظ: '+type(e).__name__)
+            await ui.show('تعذّر الحفظ: '+type(e).__name__, settings_kb(), view='setup')
     return dp

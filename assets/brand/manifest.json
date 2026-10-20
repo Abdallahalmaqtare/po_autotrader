@@ -1,0 +1,170 @@
+{
+  "home": {
+    "file": "home.jpg",
+    "size": [
+      836,
+      470
+    ],
+    "sheet": "brand_core.png",
+    "crop": [
+      0,
+      0,
+      836,
+      470
+    ]
+  },
+  "settings": {
+    "file": "settings.jpg",
+    "size": [
+      836,
+      470
+    ],
+    "sheet": "brand_core.png",
+    "crop": [
+      836,
+      0,
+      1672,
+      470
+    ]
+  },
+  "status": {
+    "file": "status.jpg",
+    "size": [
+      836,
+      471
+    ],
+    "sheet": "brand_core.png",
+    "crop": [
+      0,
+      470,
+      836,
+      941
+    ]
+  },
+  "stats": {
+    "file": "stats.jpg",
+    "size": [
+      836,
+      471
+    ],
+    "sheet": "brand_core.png",
+    "crop": [
+      836,
+      470,
+      1672,
+      941
+    ]
+  },
+  "start": {
+    "file": "start.jpg",
+    "size": [
+      836,
+      470
+    ],
+    "sheet": "brand_operations.png",
+    "crop": [
+      0,
+      0,
+      836,
+      470
+    ]
+  },
+  "stop": {
+    "file": "stop.jpg",
+    "size": [
+      836,
+      470
+    ],
+    "sheet": "brand_operations.png",
+    "crop": [
+      836,
+      0,
+      1672,
+      470
+    ]
+  },
+  "forex": {
+    "file": "forex.jpg",
+    "size": [
+      836,
+      471
+    ],
+    "sheet": "brand_operations.png",
+    "crop": [
+      0,
+      470,
+      836,
+      941
+    ]
+  },
+  "accounts": {
+    "file": "accounts.jpg",
+    "size": [
+      836,
+      471
+    ],
+    "sheet": "brand_operations.png",
+    "crop": [
+      836,
+      470,
+      1672,
+      941
+    ]
+  },
+  "limits": {
+    "file": "limits.jpg",
+    "size": [
+      836,
+      470
+    ],
+    "sheet": "brand_management.png",
+    "crop": [
+      0,
+      0,
+      836,
+      470
+    ]
+  },
+  "reset": {
+    "file": "reset.jpg",
+    "size": [
+      836,
+      470
+    ],
+    "sheet": "brand_management.png",
+    "crop": [
+      836,
+      0,
+      1672,
+      470
+    ]
+  },
+  "setup": {
+    "file": "setup.jpg",
+    "size": [
+      836,
+      471
+    ],
+    "sheet": "brand_management.png",
+    "crop": [
+      0,
+      470,
+      836,
+      941
+    ]
+  },
+  "diagnostic": {
+    "file": "diagnostic.jpg",
+    "size": [
+      836,
+      471
+    ],
+    "sheet": "brand_management.png",
+    "crop": [
+      836,
+      470,
+      1672,
+      941
+    ]
+  }
+}

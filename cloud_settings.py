@@ -5,7 +5,7 @@ import math
 import os
 from urllib.parse import urlparse
 import config
-from forex_assets import FOREX_OTC, SYMBOL_NAMES
+from forex_assets import FOREX_OTC, SYMBOL_NAMES, STORED_ASSET_NAMES
 from risk_limits import risk_defaults, validate_risk
 
 MODES = ('PRACTICE', 'REAL')
@@ -95,7 +95,7 @@ def validate_document(doc):
         raise ValueError('نوع حساب غير صالح')
     validate_risk(doc.get('risk', risk_defaults()))
     t = doc['trading']
-    if t.get('asset') not in SYMBOL_NAMES:
+    if t.get('asset') not in STORED_ASSET_NAMES:
         raise ValueError('يُسمح بأزواج فوركس OTC الموجودة في القائمة فقط')
     valid_number(t['trade_amount'], .01, 100000)
     if t['duration_seconds'] not in DURATIONS:
@@ -112,6 +112,8 @@ def validate_document(doc):
 
 def patched(doc, fields):
     d = deepcopy(doc)
+    if 'trading.asset' in fields and fields['trading.asset'] not in SYMBOL_NAMES:
+        raise ValueError('اختر زوجاً من الصفحات الخمس المطابقة لبوت الإشارات')
     allowed = {'account_mode'} | {'risk.' + k for k in risk_defaults()} | {'trading.' + k for k in defaults()['trading']} | {
         f'{kind}_account.{key}' for kind in ('real', 'demo') for key in ('ssid', 'ws_url', 'uid')}
     for path, value in fields.items():

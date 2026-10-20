@@ -1,19 +1,8 @@
-FOREX_OTC = [
-    ("EUR/USD OTC", "EURUSD_otc"), ("EUR/NZD OTC", "EURNZD_otc"),
-    ("EUR/CHF OTC", "EURCHF_otc"), ("GBP/USD OTC", "GBPUSD_otc"),
-    ("USD/JPY OTC", "USDJPY_otc"), ("AUD/USD OTC", "AUDUSD_otc"),
-    ("CAD/JPY OTC", "CADJPY_otc"), ("CHF/JPY OTC", "CHFJPY_otc"),
-    ("AUD/CAD OTC", "AUDCAD_otc"), ("AUD/CHF OTC", "AUDCHF_otc"),
-    ("AUD/JPY OTC", "AUDJPY_otc"), ("AUD/NZD OTC", "AUDNZD_otc"),
-    ("CAD/CHF OTC", "CADCHF_otc"), ("EUR/AUD OTC", "EURAUD_otc"),
-    ("EUR/CAD OTC", "EURCAD_otc"), ("EUR/GBP OTC", "EURGBP_otc"),
-    ("EUR/JPY OTC", "EURJPY_otc"), ("GBP/AUD OTC", "GBPAUD_otc"),
-    ("GBP/CAD OTC", "GBPCAD_otc"), ("GBP/CHF OTC", "GBPCHF_otc"),
-    ("GBP/JPY OTC", "GBPJPY_otc"), ("GBP/NZD OTC", "GBPNZD_otc"),
-    ("NZD/JPY OTC", "NZDJPY_otc"), ("NZD/USD OTC", "NZDUSD_otc"),
-    ("USD/BRL OTC", "USDBRL_otc"), ("USD/CAD OTC", "USDCAD_otc"),
-    ("USD/CHF OTC", "USDCHF_otc"), ("USD/INR OTC", "USDINR_otc"),
-    ("USD/MXN OTC", "USDMXN_otc"), ("USD/SGD OTC", "USDSGD_otc"),
-    ("USD/TRY OTC", "USDTRY_otc"), ("USD/ZAR OTC", "USDZAR_otc"),
-]
+"""Exactly the 30 entries and row-major page order in the five supplied images.
+Legacy names are accepted for persisted v16 documents only, never shown as extra
+selectable entries. No auto-replacement of a currently configured asset.
+"""
+FOREX_OTC = [('EUR/USD (OTC)', 'EURUSD_otc'), ('GBP/USD (OTC)', 'GBPUSD_otc'), ('USD/JPY (OTC)', 'USDJPY_otc'), ('AUD/USD (OTC)', 'AUDUSD_otc'), ('CAD/JPY (OTC)', 'CADJPY_otc'), ('GBP/AUD (OTC)', 'GBPAUD_otc'), ('EUR/CAD (OTC)', 'EURCAD_otc'), ('EUR/JPY (OTC)', 'EURJPY_otc'), ('GBP/JPY (OTC)', 'GBPJPY_otc'), ('USD/CAD (OTC)', 'USDCAD_otc'), ('AUD/JPY (OTC)', 'AUDJPY_otc'), ('EUR/GBP (OTC)', 'EURGBP_otc'), ('CAD/CHF (OTC)', 'CADCHF_otc'), ('CHF/JPY (OTC)', 'CHFJPY_otc'), ('EUR/CHF (OTC)', 'EURCHF_otc'), ('GBP/CHF (OTC)', 'GBPCHF_otc'), ('NZD/CAD (OTC)', 'NZDCAD_otc'), ('NZD/CHF (OTC)', 'NZDCHF_otc'), ('CHF/NOK (OTC)', 'CHFNOK_otc'), ('EUR/HUF (OTC)', 'EURHUF_otc'), ('JOD/CNY (OTC)', 'JODCNY_otc'), ('NGN/USD (OTC)', 'NGNUSD_otc'), ('NZD/JPY (OTC)', 'NZDJPY_otc'), ('SAR/CNY (OTC)', 'SARCNY_otc'), ('AED/CNY (OTC)', 'AEDCNY_otc'), ('BHD/CNY (OTC)', 'BHDCNY_otc'), ('KES/USD (OTC)', 'KESUSD_otc'), ('OMR/CNY (OTC)', 'OMRCNY_otc'), ('QAR/CNY (OTC)', 'QARCNY_otc'), ('USD/INR (OTC)', 'USDINR_otc')]
 SYMBOL_NAMES = {sym: name for name, sym in FOREX_OTC}
+LEGACY_SYMBOL_NAMES = {'EURUSD_otc': 'EUR/USD OTC', 'EURNZD_otc': 'EUR/NZD OTC', 'EURCHF_otc': 'EUR/CHF OTC', 'GBPUSD_otc': 'GBP/USD OTC', 'USDJPY_otc': 'USD/JPY OTC', 'AUDUSD_otc': 'AUD/USD OTC', 'CADJPY_otc': 'CAD/JPY OTC', 'CHFJPY_otc': 'CHF/JPY OTC', 'AUDCAD_otc': 'AUD/CAD OTC', 'AUDCHF_otc': 'AUD/CHF OTC', 'AUDJPY_otc': 'AUD/JPY OTC', 'AUDNZD_otc': 'AUD/NZD OTC', 'CADCHF_otc': 'CAD/CHF OTC', 'EURAUD_otc': 'EUR/AUD OTC', 'EURCAD_otc': 'EUR/CAD OTC', 'EURGBP_otc': 'EUR/GBP OTC', 'EURJPY_otc': 'EUR/JPY OTC', 'GBPAUD_otc': 'GBP/AUD OTC', 'GBPCAD_otc': 'GBP/CAD OTC', 'GBPCHF_otc': 'GBP/CHF OTC', 'GBPJPY_otc': 'GBP/JPY OTC', 'GBPNZD_otc': 'GBP/NZD OTC', 'NZDJPY_otc': 'NZD/JPY OTC', 'NZDUSD_otc': 'NZD/USD OTC', 'USDBRL_otc': 'USD/BRL OTC', 'USDCAD_otc': 'USD/CAD OTC', 'USDCHF_otc': 'USD/CHF OTC', 'USDINR_otc': 'USD/INR OTC', 'USDMXN_otc': 'USD/MXN OTC', 'USDSGD_otc': 'USD/SGD OTC', 'USDTRY_otc': 'USD/TRY OTC', 'USDZAR_otc': 'USD/ZAR OTC'}
+STORED_ASSET_NAMES = {**LEGACY_SYMBOL_NAMES, **SYMBOL_NAMES}
