@@ -10,7 +10,8 @@ from aiogram.exceptions import TelegramBadRequest
 import config
 from cloud_settings import MODES, DURATIONS, valid_number, valid_url, auth_frame
 from forex_assets import FOREX_OTC, SYMBOL_NAMES
-from telegram_bootstrap import signal_username
+from account_details import account_text
+from risk_limits import risk_summary
 
 
 class AdminOnly(BaseMiddleware):
@@ -31,7 +32,7 @@ class Input(StatesGroup):
     credential = State()
     url = State()
     number = State()
-    signal_source = State()
+    limit = State()
 
 
 def kb(rows):
@@ -43,13 +44,14 @@ def home():
     return kb([[('▶️ بدء التداول | Start', 'start'), ('⏹️ إيقاف | Stop', 'stop')],
                [('⚙️ الإعدادات | Settings', 'settings')],
                [('📊 الإحصائيات | Stats', 'stats'), ('🔄 الحالة | Status', 'status')],
+               [('🛡 حدود الربح والخسارة', 'limits')],
                [('🧪 فحص الاتصال دون تداول', 'diagnose')],
                [('🗑 تصفير السجل | Reset Stats', 'reset_stats')]])
 
 
 def settings_kb():
     return kb([[('👤 إدارة الحسابات | Accounts', 'accounts')],
-               [('🤖 بوت مصدر الإشارات', 'source')],
+               [('🛡 وضع التشغيل والحدود', 'limits')],
                [('💱 أزواج فوركس OTC', 'assets:0')],
                [('💵 المبلغ الأساسي', 'amount'), ('🪜 التدبيل', 'mg')],
                [('⏱ مدة الصفقة', 'duration'), ('⚡ تأخير الدخول', 'number:entry_delay_seconds')],
@@ -60,19 +62,20 @@ def settings_kb():
                [('⬅️ الرئيسية', 'home')]])
 
 
-def sources_kb(repo):
-    source = repo.doc.get('signal_source', {})
-    names = [source.get('username', config.SIGNAL_BOT_USERNAME)] + source.get('history', [])
-    seen, rows = set(), []
-    for name in names:
-        try:
-            value = signal_username(name)
-        except Exception:
-            continue
-        if value.lower() not in seen:
-            rows.append([('@'+value, 'source_pick:'+value)])
-            seen.add(value.lower())
-    return kb(rows + [[('✍️ إضافة / تغيير اليوزر', 'source_edit')], [('⬅️ الإعدادات', 'settings')]])
+def limits_kb():
+    return kb([[('♾ تقليدي — دون حدود', 'risk:TRADITIONAL')],
+               [('🛡 تشغيل بحدود', 'risk:LIMITED')],
+               [('🎯 حد الربح', 'limit:profit_limit'), ('🛑 حد الخسارة', 'limit:loss_limit')],
+               [('⬅️ الإعدادات', 'settings')]])
+
+
+def limits_text(doc):
+    return (risk_summary(doc) + '\n'
+            'اختر الحدود وعدّل المبالغ. التفعيل لا يصفّر الأرباح السابقة؛ '
+            'تُستخدم نفس أرقام التقرير المحفوظ لهذا الحساب. '
+            'إذا كان الحد متحققاً بالفعل يتوقف/يُمنع Start. '
+            'لبداية من الصفر استخدم تصفير السجل (يصفّر الحسابين).\n'
+            'التوقف يمنع الدخول الجديد بعد حسم الصفقة؛ مبلغ الصفقة الأخيرة قد يتجاوز الحد.')
 
 
 def accounts_kb():
@@ -103,9 +106,10 @@ def report(repo, worker):
     net = s['net_pnl']
     net_s = f"+${net:.2f} 🟢" if net >= 0 else f"-${abs(net):.2f} 🔴"
     return (f"📊 تقرير الأداء — {d['account_mode']}\n"
+            + account_text(d, worker.po) + risk_summary(d) +
+
             f"الحالة: {'شغال 🟢' if worker.running else 'متوقف 🔴'}\n"
             f"الزوج: {t['asset']} | المدة: {t['duration_seconds']}s\n"
-            f"مصدر الإشارات: @{d.get('signal_source', {}).get('username', config.SIGNAL_BOT_USERNAME)}\n"
             f"الأساس: ${t['trade_amount']:g} | مستويات التدبيل: {t['martingale_steps']}\n"
             '───────────────────────\n'
             '📈 الصفقات والنتائج:\n'
@@ -124,7 +128,7 @@ def report(repo, worker):
             f"• إجمالي المفقود في السلاسل المستنفدة: ${s['lost_amount']:.2f}\n"
             f"• الرصيد الحالي للحساب: {bal}\n"
             'التقرير مستقل لكل حساب ومحفوظ عبر إعادة التشغيل.\n'
-            'الحساب المالي للنتائج ذات الربح الصريح المرتبطة بمعرّف صفقة؛ النتائج غير المحسومة لا تُحسب خسائر.')
+            'المبالغ استدلال من الرصيد وليست كشف حساب رسمي؛ الأوامر غير المحسومة لا تُحسب خسائر.')
 
 
 async def panel(bot, cb, text, markup):
@@ -138,7 +142,7 @@ async def panel(bot, cb, text, markup):
 def build_dispatcher(repo, worker, bot):
     dp = Dispatcher()
     async def notify_diagnostic(text):
-        await bot.send_message(config.ADMIN_TELEGRAM_ID, '⚠️ تشخيص بدء التداول\n' + text)
+        await bot.send_message(config.ADMIN_TELEGRAM_ID, '🔔 إشعار البوت\n' + text)
     worker.notify = notify_diagnostic
     dp.message.outer_middleware(AdminOnly())
     dp.callback_query.outer_middleware(AdminOnly())
@@ -181,6 +185,7 @@ def build_dispatcher(repo, worker, bot):
             if action == 'reset_confirm':
                 await worker.stop()
                 await repo.reset_stats()
+                worker.stage = 'stopped'
                 return await panel(bot, cb, '✅ تم تصفير السجل بالكامل. التداول متوقف — اضغط Start للبدء من جديد.',
                                    home())
             if action == 'stats':
@@ -189,11 +194,11 @@ def build_dispatcher(repo, worker, bot):
                 text = await worker.diagnose()
                 return await panel(bot, cb, text, home())
             if action == 'status':
-                text = (f"الحساب: {repo.doc['account_mode']}\nالمرحلة: {worker.stage}\n"
+                text = (account_text(repo.doc, worker.po) + risk_summary(repo.doc) +
+                        f"المرحلة: {worker.stage}\n"
                         f"WebSocket: {'متصل' if worker.po and worker.po.connected else 'غير متصل'}\n"
                         f"MongoDB writer: {'فعال' if repo.leader else 'غير فعال'}\n"
                         f"الزوج: {repo.doc['trading']['asset']}\n"
-                        f"مصدر الإشارات: @{repo.doc.get('signal_source', {}).get('username', config.SIGNAL_BOT_USERNAME)}\n"
                         f"آخر كود خطأ: {worker.last_error or 'لا يوجد'}\n"
                         'البيانات السرية لا تظهر في اللوحة.')
                 if worker.diagnostic:
@@ -202,19 +207,24 @@ def build_dispatcher(repo, worker, bot):
                 return await panel(bot, cb, text, kb(rows) if rows else home())
             if action == 'settings':
                 return await panel(bot, cb, '⚙️ الإعدادات؛ التغييرات العادية تسري من الدورة القادمة.', settings_kb())
-            if action == 'source':
-                current = repo.doc.get('signal_source', {}).get('username', config.SIGNAL_BOT_USERNAME)
-                return await panel(bot, cb, '🤖 المصدر الحالي: @'+current+
-                                   '\nاختر بوتاً محفوظاً أو أضف يوزراً جديداً. لا نضغط Start في المصدر نيابة عنك.', sources_kb(repo))
-            if action == 'source_edit':
-                await state.set_state(Input.signal_source)
-                return await panel(bot, cb, 'أرسل @username الخاص ببوت الإشارات أو رابط t.me مباشر. '
-                                   'سنفحص أنه بوت قبل حفظه. /cancel للإلغاء.', None)
-            if action.startswith('source_pick:'):
-                text = await worker.change_signal_source(action.split(':',1)[1])
-                return await panel(bot, cb, text, sources_kb(repo))
             if action == 'accounts':
-                return await panel(bot, cb, f"👤 الحساب الحالي: {repo.doc['account_mode']}\nلا تُعرض قيم SSID.", accounts_kb())
+                return await panel(bot, cb, account_text(repo.doc, worker.po) + 'لا تُعرض قيم SSID.', accounts_kb())
+            if action == 'limits':
+                return await panel(bot, cb, limits_text(repo.doc), limits_kb())
+            if action.startswith('risk:'):
+                selected = action.split(':', 1)[1]
+                if selected not in ('TRADITIONAL', 'LIMITED'):
+                    raise ValueError('وضع تشغيل غير صالح')
+                text = await worker.change({'risk.mode': selected})
+                return await panel(bot, cb, text + '\n\n' + limits_text(repo.doc), limits_kb())
+            if action.startswith('limit:'):
+                key = action.split(':', 1)[1]
+                if key not in ('profit_limit', 'loss_limit'):
+                    raise ValueError('حد غير صالح')
+                await state.set_state(Input.limit)
+                await state.update_data(key=key)
+                label = 'الربح' if key == 'profit_limit' else 'الخسارة'
+                return await panel(bot, cb, f'أرسل حد {label} بالدولار كعدد موجب، مثال 50. /cancel للإلغاء.', None)
             if action == 'real_confirm':
                 return await panel(bot, cb, '⚠️ الحساب الحقيقي يستخدم أموالاً حقيقية. تأكيد التبديل؟',
                                    kb([[('تأكيد REAL', 'mode:REAL')], [('إلغاء', 'accounts')]]))
@@ -223,7 +233,7 @@ def build_dispatcher(repo, worker, bot):
                 if mode not in MODES:
                     raise ValueError('حساب غير صالح')
                 text = await worker.change({'account_mode': mode}, reconnect=True)
-                return await panel(bot, cb, text, accounts_kb())
+                return await panel(bot, cb, text + '\n' + account_text(repo.doc, worker.po), accounts_kb())
             if action.startswith('credentials:'):
                 mode = action.split(':')[1]
                 if mode not in MODES:
@@ -274,18 +284,6 @@ def build_dispatcher(repo, worker, bot):
             await bot.send_message(config.ADMIN_TELEGRAM_ID,
                 f'تعذّرت العملية ({type(e).__name__}). لم يُؤكّد نجاح التغيير؛ راجع الحالة.', reply_markup=home())
 
-    @dp.message(Input.signal_source)
-    async def source_input(msg: Message, state: FSMContext):
-        try:
-            value = signal_username(msg.text or '')
-            text = await worker.change_signal_source(value)
-            await state.clear()
-            await msg.answer(text, reply_markup=sources_kb(repo))
-        except ValueError as exc:
-            await msg.answer(str(exc))
-        except Exception:
-            await msg.answer('تعذّر اعتماد المصدر. تحقق من اليوزر وأن حساب الجلسة يستطيع فتح البوت. لم يتغير المصدر المحفوظ.')
-
     @dp.message(Input.credential)
     async def credential(msg: Message, state: FSMContext):
         data = await state.get_data()
@@ -313,12 +311,28 @@ def build_dispatcher(repo, worker, bot):
             text = await worker.change({key+'.ssid': data['frame'], key+'.ws_url': value},
                                        reconnect=repo.doc['account_mode'] == mode)
             await state.clear()
-            await msg.answer(text, reply_markup=accounts_kb())
+            await msg.answer(text + '\n' + account_text(repo.doc, worker.po), reply_markup=accounts_kb())
         except ValueError as e:
             await msg.answer(str(e))
         except Exception as e:
             await state.clear()
             await msg.answer('لم يُؤكّد حفظ البيانات؛ حاول مجدداً. نوع الخطأ: '+type(e).__name__)
+
+    @dp.message(Input.limit)
+    async def limit_input(msg: Message, state: FSMContext):
+        try:
+            data = await state.get_data()
+            key = data.get('key')
+            if key not in ('profit_limit', 'loss_limit'):
+                raise ValueError('حد غير صالح')
+            value = valid_number(msg.text or '', .01, 1000000)
+            text = await worker.change({'risk.' + key: value})
+            await state.clear()
+            await msg.answer(text + '\n\n' + limits_text(repo.doc), reply_markup=limits_kb())
+        except (ValueError, TypeError):
+            await msg.answer('أدخل مبلغاً موجباً بين 0.01 و1000000 أو /cancel.')
+        except Exception as exc:
+            await msg.answer('لم يُؤكد الحفظ: ' + type(exc).__name__)
 
     @dp.message(Input.number)
     async def number_input(msg: Message, state: FSMContext):

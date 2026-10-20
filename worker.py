@@ -15,6 +15,7 @@ from martingale import MoneyManager
 from telegram_signal import SignalListener
 from telegram_bootstrap import session_from_env, signal_username
 from diagnostics import SafeIssue, diagnose_exception
+from risk_limits import risk_state, limit_stop_text
 
 
 class TradingWorker:
@@ -36,6 +37,7 @@ class TradingWorker:
         self.notify = None
         self._last_notice = None
         self._notice_at = 0.0
+        self._last_limit_notice = None
 
     @property
     def pending(self):
@@ -86,75 +88,10 @@ class TradingWorker:
                 pass  # Telegram retry outages must not hide the original issue
         return diagnostic
 
-    def current_source(self):
-        return signal_username(self.repo.doc.get('signal_source', {}).get('username') or config.SIGNAL_BOT_USERNAME)
-
-    async def _bind_source(self, username):
-        new_listener = SignalListener(self.tg, username=username)
-        try:
-            await new_listener.init()
-            if not getattr(new_listener.bot_entity, 'bot', False):
-                raise SafeIssue('SIGNAL_TARGET_NOT_BOT')
-        except BaseException:
-            new_listener.detach()
-            raise
-        old = self.listener
-        if old is not None:
-            old.detach()
-        self.listener = new_listener
-
-    async def change_signal_source(self, value):
-        """Validate bot identity before saving; new source applies between cycles."""
-        username = signal_username(value)
-        async with self.operations:
-            # Candidate validation must NOT require the old source to resolve;
-            # otherwise a deleted old bot would make changing sources impossible.
-            client = self.tg if self.tg and self.tg.is_connected() else None
-            temporary = client is None
-            if temporary:
-                client = self.telegram_factory(session_from_env(config.TELEGRAM_STRING_SESSION),
-                                               config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
-            try:
-                async with asyncio.timeout(config.CONNECT_TIMEOUT_SECONDS):
-                    if temporary:
-                        await client.connect()
-                        if not await client.is_user_authorized():
-                            raise SafeIssue('TG_SESSION_UNAUTHORIZED')
-                    target = await client.get_entity(username)
-                if not getattr(target, 'bot', False):
-                    raise ValueError('المصدر المختار ليس حساب بوت')
-            finally:
-                if temporary:
-                    with suppress(Exception):
-                        await client.disconnect()
-            history = self.repo.doc.get('signal_source', {}).get('history', [])
-            try:
-                old = self.current_source()
-            except Exception:
-                old = username
-            ordered = [username, old] + history
-            seen, unique = set(), []
-            for name in ordered:
-                try:
-                    normalized = signal_username(name)
-                except Exception:
-                    continue
-                if normalized.lower() not in seen:
-                    unique.append(normalized)
-                    seen.add(normalized.lower())
-            await self.repo.update({'signal_source.username': username,
-                                    'signal_source.history': unique[:12]})
-        return (f'تم اعتماد @{username} وحفظه في MongoDB. '
-                'تُكمل الصفقة الحالية أولاً إن وجدت، ثم تُطلب الإشارات من المصدر الجديد.')
-
     async def _telegram(self):
         # A live socket is NOT sufficient: v11 could leave an uninitialized
         # client after get_entity failed, then skip initialization on retry.
-        desired_source = self.current_source()
         if self.tg and self.tg.is_connected() and self.listener is not None:
-            if self.listener.source_username.lower() != desired_source.lower():
-                self.stage = 'signal_bot_resolve'
-                await self._bind_source(desired_source)
             return
         if self.tg:
             with suppress(Exception):
@@ -162,7 +99,7 @@ class TradingWorker:
         self.tg, self.listener = None, None
         self.stage = 'telegram_session_parse'
         session = session_from_env(config.TELEGRAM_STRING_SESSION)
-        desired_source = self.current_source()
+        config.SIGNAL_BOT_USERNAME = signal_username(config.SIGNAL_BOT_USERNAME)
         try:
             self.stage = 'telegram_client_create'
             self.tg = self.telegram_factory(session, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
@@ -173,7 +110,11 @@ class TradingWorker:
                 if not await self.tg.is_user_authorized():
                     raise SafeIssue('TG_SESSION_UNAUTHORIZED')
                 self.stage = 'signal_bot_resolve'
-                await self._bind_source(desired_source)
+                listener = SignalListener(self.tg)
+                await listener.init()
+                if not getattr(listener.bot_entity, 'bot', False):
+                    raise SafeIssue('SIGNAL_TARGET_NOT_BOT')
+                self.listener = listener
         except BaseException:
             if self.tg:
                 with suppress(Exception):
@@ -190,7 +131,7 @@ class TradingWorker:
                 self.stage = 'telegram_session_parse'
                 session_from_env(config.TELEGRAM_STRING_SESSION)
                 self.stage = 'signal_bot_resolve'
-                self.current_source()
+                signal_username(config.SIGNAL_BOT_USERNAME)
                 await self._telegram()
                 self.stage = 'pocket_credentials'
                 await self.connect_account()
@@ -219,12 +160,36 @@ class TradingWorker:
         self.po = self.po_factory(credentials, mode)
         await self.po.connect()
 
+    async def enforce_limits(self, notify=True):
+        state = risk_state(self.repo.doc)
+        if not state['reason']:
+            self._last_limit_notice = None
+            return False
+        self.stop_event.set()
+        self.stage = 'limit_reached'
+        # If a setting is lowered mid-wait, cancel the waiting task immediately.
+        # Never cancel an already-open trade's result collection.
+        if self.task and self.task is not asyncio.current_task() and not self.in_flight:
+            self.task.cancel()
+        key = (state['account_mode'], state['reason'], state['net_pnl'],
+               state['profit_limit'], state['loss_limit'])
+        if notify and key != self._last_limit_notice:
+            self._last_limit_notice = key
+            print(f"[RISK] {state['reason']} account={state['account_mode']} "
+                  f"net={state['net_pnl']:.6f}; new entries disabled", flush=True)
+            if self.notify:
+                with suppress(Exception):
+                    await asyncio.wait_for(self.notify(limit_stop_text(self.repo.doc)), timeout=5)
+        return True
+
     async def start(self):
         async with self.operations:
             if self.task and not self.task.done():
                 return 'الحلقة تعمل بالفعل أو جارٍ تشغيلها.'
             if not self.repo.leader:
                 raise RuntimeError('lease_not_owned')
+            if await self.enforce_limits(notify=False):
+                return limit_stop_text(self.repo.doc)
             if self.pending:
                 await self.repo.acknowledge_pending()
                 print('[WORKER] previous uncertain order auto-archived as UNCONFIRMED '
@@ -237,7 +202,7 @@ class TradingWorker:
                 self.stage = 'telegram_session_parse'
                 session_from_env(config.TELEGRAM_STRING_SESSION)
                 self.stage = 'signal_bot_resolve'
-                self.current_source()
+                signal_username(config.SIGNAL_BOT_USERNAME)
             except Exception as exc:
                 diagnostic = await self.record_error(exc, send_notification=False)
                 self.stage = 'error'
@@ -260,6 +225,8 @@ class TradingWorker:
                 if self.po:
                     await self.po.close()
             await self.repo.update(fields)
+            if await self.enforce_limits():
+                return 'تم الحفظ.\n' + limit_stop_text(self.repo.doc)
             if reconnect:
                 if not self.pending:
                     await self.repo.reset_step()
@@ -304,15 +271,15 @@ class TradingWorker:
             while not self.stop_event.is_set():
                 if not self.repo.leader:
                     raise RuntimeError('lease_lost')
+                if await self.enforce_limits():
+                    break
                 if self.pending:
                     await self.repo.acknowledge_pending()
                     print('[WORKER] stale pending marker auto-archived; continuing', flush=True)
-                await self._telegram()  # binds source changes only at a cycle boundary
-                source = self.current_source()
                 mode = self.repo.doc['account_mode']
                 t = deepcopy(self.repo.doc['trading'])
                 self.apply_snapshot(mode, t)
-                sig = (mode, t['asset'], t['trade_amount'], t['martingale_steps'], source.lower())
+                sig = (mode, t['asset'], t['trade_amount'], t['martingale_steps'])
                 if sig != signature:
                     # New sizing/pair/account starts a fresh ladder, not an old oversized order.
                     saved = self.repo.doc['runtime'].get('sizing_signature')
@@ -321,7 +288,7 @@ class TradingWorker:
                     mm = MoneyManager(t['trade_amount'], t['martingale_steps'])
                     mm.step = int(self.repo.doc['runtime'].get('martingale_step', 0))
                     signature = sig
-                    chain_stake = float(self.repo.doc['runtime'].get('chain_loss', 0.0))
+                    chain_stake = 0.0
                 if not self.po or not self.po.connected or self.po.mode != mode:
                     self.stage = 'connecting'
                     try:
@@ -357,25 +324,23 @@ class TradingWorker:
                 if self.stop_event.is_set():
                     break
                 # Changes received while waiting invalidate this old signal.
-                if (t != self.repo.doc['trading'] or mode != self.repo.doc['account_mode'] or
-                        source.lower() != self.current_source().lower()):
+                if t != self.repo.doc['trading'] or mode != self.repo.doc['account_mode']:
                     continue
                 if not self.po.connected:
                     continue  # fresh connection needs a fresh signal, not a replay
+                if await self.enforce_limits():
+                    break
                 order = dict(id=uuid4().hex, mode=mode, amount=mm.current_amount(),
                              asset=t['asset'], direction=direction,
-                             created_at=time.time(), step=mm.step, sizing_signature=list(sig), signal_source=source)
+                             created_at=time.time(), step=mm.step, sizing_signature=list(sig))
                 if order['amount'] > self.po.balance:
                     raise SafeIssue('INSUFFICIENT_BALANCE')
                 # Persist BEFORE send: redeploy must never automatically repeat an uncertain order.
                 self.stage = 'order_reserve'
                 await self.repo.reserve(order)
-                if (self.stop_event.is_set() or source.lower() != self.current_source().lower() or
-                        t != self.repo.doc['trading'] or mode != self.repo.doc['account_mode']):
+                if self.stop_event.is_set():
                     await self.repo.resolve(order, None, None, None, mm.step, dispatched=False)
-                    if self.stop_event.is_set():
-                        break
-                    continue
+                    break
                 self.in_flight = True
                 self.stage = 'order_send'
                 before = None
@@ -391,24 +356,21 @@ class TradingWorker:
                 except Exception as send_err:
                     print(f'[WORKER] send/result error ({type(send_err).__name__}) - continuing', flush=True)
                     ok = False
+                chain_stake += order['amount']
                 prev_step = mm.step
                 if result is None:
-                    # Uncertainty must never carry an elevated stake into a new signal.
-                    # Do not guess LOSS; archive once and reset sizing to base automatically.
-                    mm.step = 0
-                    chain_stake = 0.0
-                    print('[WORKER] UNCONFIRMED -> reset BASE; no loss/doubling inferred', flush=True)
-                    # If send timed out, do not overlap the possibly still-open order.
-                    if getattr(self.po, 'due_at', 0) > time.monotonic():
-                        await self._pause(self.po.due_at - time.monotonic() + 1)
+                    # Uncertain outcome: NEVER stop and never force a manual review.
+                    # Keep the SAME martingale step (no doubling on an unverified trade),
+                    # archive the order as unconfirmed, reconnect automatically and go on.
+                    print('[WORKER] UNCONFIRMED -> amount kept at current step; '
+                          'auto-reconnecting and continuing without review', flush=True)
                     self.stage = 'result_save'
-                    await self.repo.resolve(order, None, None, None, 0, chain_loss=0.0)
-                    # Flush uncertain state by reconnecting before requesting a fresh signal.
-                    if hasattr(self.po, 'close'):
-                        await self.po.close()
+                    await self.repo.resolve(order, None, before, self.po.balance, mm.step)
                     self.in_flight = False
+                    if await self.enforce_limits():
+                        break
                     self.stage = 'delay'
-                    await self._pause(max(1.0, t['loop_delay_seconds']))
+                    await self._pause(t['loop_delay_seconds'])
                     continue
                 mm.register_result(result)
                 seq_lost = 0
@@ -416,7 +378,6 @@ class TradingWorker:
                 if result == 'win':
                     chain_stake = 0.0                     # sequence closed with a win
                 elif result == 'loss':
-                    chain_stake += order['amount']  # only confirmed losses, not draws or unknowns
                     if prev_step >= mm.max_doubles - 1:
                         # ALL doubling steps lost -> ONE full sequence loss (user rule)
                         seq_lost = 1
@@ -427,10 +388,10 @@ class TradingWorker:
                 # draw: chain_stake kept (same step repeats with same amount)
                 self.stage = 'result_save'
                 await self.repo.resolve(order, result, before, self.po.balance, mm.step,
-                                        seq_lost=seq_lost, seq_lost_amount=seq_lost_amount,
-                                        outcome_source=getattr(self.po, 'result_source', None),
-                                        net_profit=getattr(self.po, 'result_net', None), chain_loss=chain_stake)
+                                        seq_lost=seq_lost, seq_lost_amount=seq_lost_amount)
                 self.in_flight = False
+                if await self.enforce_limits():
+                    break
                 self.stage = 'delay'
                 await self._pause(t['loop_delay_seconds'])
         except asyncio.CancelledError:
@@ -441,14 +402,12 @@ class TradingWorker:
         finally:
             self.running = False
             self.in_flight = False
-            if self.stage not in ('error', 'error_review'):
+            if self.stage not in ('error', 'error_review', 'limit_reached'):
                 self.stage = 'stopped'
 
     async def close(self):
         await self.stop()
         if self.po:
             await self.po.close()
-        if self.listener:
-            self.listener.detach()
         if self.tg:
             await self.tg.disconnect()

@@ -1,0 +1,44 @@
+"""Public identity only: never expose auth/session payloads in Telegram panels."""
+import json
+from cloud_settings import auth_frame
+
+
+def positive_uid(value):
+    if isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if text.isascii() and text.isdecimal() and 0 < len(text) <= 24 and int(text) > 0:
+        return str(int(text))
+    return None
+
+
+def credential_uid(credentials, mode):
+    try:
+        normalized = auth_frame(credentials.get('ssid', ''), mode, credentials.get('uid', 0))
+        return positive_uid(json.loads(normalized[2:])[1].get('uid'))
+    except (ValueError, TypeError, KeyError, IndexError):
+        return None
+
+
+def account_identity(doc, po=None):
+    mode = doc['account_mode']
+    key = 'real_account' if mode == 'REAL' else 'demo_account'
+    credentials = doc[key]
+    uid = credential_uid(credentials, mode)
+    # Never display a previous account's live UID after settings changed.
+    matches = (po is not None and getattr(po, 'connected', False)
+               and getattr(po, 'mode', None) == mode
+               and getattr(po, 'credentials', None) == credentials)
+    live_uid = positive_uid(getattr(po, 'server_uid', None)) if matches else None
+    return {'mode': mode, 'uid': live_uid or uid,
+            'source': 'من استجابة المنصة' if live_uid else 'من بيانات الجلسة المحفوظة' if uid else 'غير متاح',
+            'connected': bool(matches)}
+
+
+def account_text(doc, po=None):
+    info = account_identity(doc, po)
+    label = 'حقيقي REAL' if info['mode'] == 'REAL' else 'تجريبي DEMO / PRACTICE'
+    return (f"👤 الحساب: {label}\n"
+            f"معرّف حساب المنصة UID: {info['uid'] or 'غير متاح'}\n"
+            f"مصدر المعرّف: {info['source']}\n"
+            'قد يكون UID نفسه للحقيقي والديمو إذا كانا تابعين لنفس المستخدم؛ نوع الحساب هو الفاصل.\n')

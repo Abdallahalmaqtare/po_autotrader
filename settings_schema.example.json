@@ -7,7 +7,7 @@
   },
   "real_account": {
     "ssid": "<secret>",
-    "ws_url": "wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket"
+    "ws_url": "wss://api-msk.po.market/socket.io/?EIO=4&transport=websocket"
   },
   "trading": {
     "asset": "EURUSD_otc",
@@ -22,5 +22,10 @@
     "lost_trades": 0,
     "draws": 0,
     "net_pnl": 0.0
+  },
+  "risk": {
+    "mode": "TRADITIONAL",
+    "profit_limit": 50.0,
+    "loss_limit": 50.0
   }
 }

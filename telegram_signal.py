@@ -1,96 +1,114 @@
-"""Per-instance signal source, detachable handlers and per-request armed queue.
-Original UP/DOWN parsing and inline New signal workflow are preserved.
 """
-import asyncio
+telegram_signal.py - MTProto client (Telethon) that:
+  1) Auto-presses the inline button "New signal" in the signal bot chat
+  2) Waits for the bot's signal message
+  3) Parses ONLY the Direction (UP / DOWN) - accuracy % is ignored
+"""
 import re
-from collections import deque
-from telethon import events
+import asyncio
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+
+from telethon import TelegramClient, events
+
 import config
 from logger import log
-from telegram_bootstrap import signal_username
 
-DIRECTION_RE = re.compile(r'Direction\s*:\s*(UP|DOWN)\b', re.IGNORECASE)
+# Accept both old and new labels; normalize to the existing trading interface.
+DIRECTION_RE = re.compile(
+    r"(?<!\w)(?:Direction|Meta\s+Signal)\s*:\s*(UP|DOWN|HIGHER|LOWER)\b",
+    re.IGNORECASE)
+DIRECTION_MAP = {'UP': 'UP', 'HIGHER': 'UP', 'DOWN': 'DOWN', 'LOWER': 'DOWN'}
+
+
+def parse_direction(text):
+    text = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060-\u2069]", "", text or "")
+    text = re.sub(r"[*_`]", "", text)
+    matches = {DIRECTION_MAP[m.group(1).upper()] for m in DIRECTION_RE.finditer(text)}
+    # Never choose arbitrarily if a message carries contradictory directions.
+    return next(iter(matches)) if len(matches) == 1 else None
+
+# Matches "Current time (UTC+3): 23:41:56" -> used to identify signal messages
+SIGNAL_MARKER_RE = re.compile(r"(Direction|Meta\s+Signal|Current time|Asset)\s*:", re.IGNORECASE)
 
 
 class SignalListener:
-    def __init__(self, client, username=None):
+    def __init__(self, client: TelegramClient):
         self.client = client
-        self.source_username = signal_username(username or config.SIGNAL_BOT_USERNAME)
         self.bot_entity = None
-        self._pending = asyncio.Queue()
-        self._handler = None
-        self._accepting = False
-        self._min_id = 0
-        self._seen = deque(maxlen=128)
+        self._pending: asyncio.Queue[str] = asyncio.Queue()
+        self._press_time: Optional[datetime] = None
+        self._seen_pending = set()
 
     async def init(self):
-        self.bot_entity = await self.client.get_entity(self.source_username)
-        if not getattr(self.bot_entity,'bot',False):
-            raise ValueError('SIGNAL_TARGET_NOT_BOT')
-        entity_id = self.bot_entity.id
+        self.bot_entity = await self.client.get_entity(config.SIGNAL_BOT_USERNAME)
+        log(f"[TG] Signal bot resolved: @{config.SIGNAL_BOT_USERNAME}")
 
-        async def handler(event):
-            if not self._accepting or event.sender_id != entity_id or event.chat_id != entity_id:
-                return
-            text = event.raw_text or ''
-            message_id = event.id
-            if message_id < self._min_id or (message_id,text) in self._seen:
-                return
-            if not DIRECTION_RE.search(text):
-                return
-            self._seen.append((message_id,text))
+        @self.client.on(events.NewMessage(from_users=self.bot_entity))
+        @self.client.on(events.MessageEdited(from_users=self.bot_entity))
+        async def on_bot_message(event):
+            text = event.raw_text or ""
+            direction = parse_direction(text)
+            if direction is None:
+                return  # preparation/unknown/conflicting text is never a trade
+            key = (getattr(event, 'id', None), direction)
+            if key in self._seen_pending:
+                return  # same final card delivered both as new and edited event
+            if len(self._seen_pending) >= 256:
+                self._seen_pending.clear()
+            self._seen_pending.add(key)
             await self._pending.put(text)
 
-        self._handler = handler
-        self.client.add_event_handler(handler, events.NewMessage(chats=entity_id, from_users=entity_id))
-        self.client.add_event_handler(handler, events.MessageEdited(chats=entity_id, from_users=entity_id))
-        log(f'[TG] Signal source ready: @{self.source_username}')
-
-    def detach(self):
-        self._accepting = False
-        if self._handler:
-            self.client.remove_event_handler(self._handler)
-            self._handler = None
-        self.drain_pending()
-
     def drain_pending(self):
-        self._accepting = False
+        """Drops any stale signal texts left in the queue from earlier cycles."""
+        self._seen_pending.clear()
+        dropped = 0
         while not self._pending.empty():
             try:
                 self._pending.get_nowait()
+                dropped += 1
             except asyncio.QueueEmpty:
                 break
+        if dropped:
+            log(f"[TG] Drained {dropped} stale signal(s) from previous cycle")
 
-    async def press_new_signal(self):
-        latest_id = 0
+    # ------------------------------------------------------------------
+    async def press_new_signal(self) -> bool:
+        """Finds the latest message carrying the 'New signal' button and clicks it."""
+        t0 = datetime.now(timezone.utc)
+        log(f"[TG] Pressing '{config.NEW_SIGNAL_BUTTON_TEXT}' ...")
+
         async for msg in self.client.iter_messages(self.bot_entity, limit=10):
-            latest_id = max(latest_id, msg.id)
             if not msg.buttons:
                 continue
             for row in msg.buttons:
-                for button in row:
-                    if button.text and config.NEW_SIGNAL_BUTTON_TEXT.lower() in button.text.lower():
-                        self.drain_pending()
-                        self._min_id = latest_id
-                        self._seen.append((msg.id, msg.raw_text or ''))
-                        self._accepting = True  # arm before await: fast reply must not be lost
-                        try:
-                            await msg.click(text=button.text)
-                        except BaseException:
-                            self.drain_pending()
-                            raise
-                        log(f'[TG] New signal requested from @{self.source_username}')
+                for btn in row:
+                    if btn.text and config.NEW_SIGNAL_BUTTON_TEXT.lower() in btn.text.lower():
+                        await msg.click(text=btn.text)
+                        self._press_time = datetime.now(timezone.utc)
+                        ms = (self._press_time - t0).total_seconds() * 1000
+                        log(f"[TG] Button PRESSED at {self._press_time.isoformat(timespec='milliseconds')} "
+                            f"(took {ms:.0f} ms)")
                         return True
+
+        log("[TG] ERROR: 'New signal' button not found in recent messages")
         return False
 
-    async def wait_for_signal(self, timeout):
+    # ------------------------------------------------------------------
+    async def wait_for_signal(self, timeout: int) -> Optional[str]:
+        """Waits for the next signal message; returns 'UP', 'DOWN' or None."""
         try:
-            text = await asyncio.wait_for(self._pending.get(), timeout)
-            match = DIRECTION_RE.search(text)
-            direction = match.group(1).upper() if match else None
-            log(f'[TG] Direction={direction}; source=@{self.source_username}')
-            return direction
+            text = await asyncio.wait_for(self._pending.get(), timeout=timeout)
         except asyncio.TimeoutError:
+            log(f"[TG] TIMEOUT: no signal received within {timeout}s")
             return None
-        finally:
-            self._accepting = False
+
+        direction = parse_direction(text)
+        # Extract extra fields for logging (optional, only for display)
+        asset_m = re.search(r"Asset\s*:\s*(.+)", text)
+        acc_m = re.search(r"Accuracy rate\s*:\s*([\d.]+%)", text)
+        asset = asset_m.group(1).strip() if asset_m else "?"
+        accuracy = acc_m.group(1) if acc_m else "ignored"
+        log(f"[TG] SIGNAL RECEIVED -> Direction: {direction} | Bot asset: {asset} | "
+            f"Accuracy: {accuracy} (ignored as configured)")
+        return direction

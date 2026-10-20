@@ -42,7 +42,22 @@ class Repository:
                 elif isinstance(v, dict) and isinstance(a[k], dict):
                     merge(a[k], v)
             return a
+        previous = deepcopy(raw)
         self.doc = validate_document(merge(raw, defaults()))
+        if self.leader:
+            missing = {}
+            def collect(old, new, prefix=''):
+                for key, value in new.items():
+                    path = prefix + key
+                    if key not in old:
+                        missing[path] = deepcopy(value)
+                    elif isinstance(value, dict) and isinstance(old[key], dict):
+                        collect(old[key], value, path + '.')
+            collect(previous, self.doc)
+            if missing:
+                result = await self.collection.update_one(self.fence(), {'$set': missing})
+                if result.matched_count != 1:
+                    raise RuntimeError('lease_lost')
         return self.doc
 
     def fence(self):
@@ -78,13 +93,7 @@ class Repository:
     async def update(self, fields):
         async with self.lock:
             new_doc = patched(self.doc, fields)
-            clean = {}
-            for path in fields:
-                value = new_doc
-                for key in path.split('.'):
-                    value = value[key]
-                clean[path] = deepcopy(value)
-            r = await self.collection.update_one(self.fence(), {'$set': clean})
+            r = await self.collection.update_one(self.fence(), {'$set': fields})
             if r.matched_count != 1:
                 raise RuntimeError('lease_lost')
             # DB first: a failed write is never reported as a saved setting.
@@ -100,8 +109,7 @@ class Repository:
             self.doc['runtime']['pending'] = deepcopy(order)
 
     async def resolve(self, order, result, before, after, next_step, dispatched=True,
-                      seq_lost=0, seq_lost_amount=0.0, outcome_source=None,
-                      net_profit=None, chain_loss=0.0):
+                      seq_lost=0, seq_lost_amount=0.0):
         """Idempotent by pending ID. Unknown finances are never counted as full loss."""
         amount = order['amount']
         mode = order['mode']
@@ -113,12 +121,8 @@ class Repository:
             if result in ('win', 'loss', 'draw'):
                 key = {'win': 'won_trades', 'loss': 'lost_trades', 'draw': 'draws'}[result]
                 values[key] = 1
-                delta = None
-                if outcome_source == 'matched_close' and net_profit is not None:
-                    delta = round(float(net_profit), 6)
-                elif outcome_source is None and before is not None and after is not None:
-                    delta = round(after - before, 6)  # legacy/test adapter only
-                if delta is not None:
+                if before is not None and after is not None:
+                    delta = round(after - before, 6)
                     values.update(net_pnl=delta, total_returned=round(max(0, amount+delta), 6),
                                   financial_trades=1)
             else:
@@ -129,8 +133,7 @@ class Repository:
             for prefix in ('session_stats', 'account_stats.' + mode):
                 inc.update({prefix + '.' + k: v for k, v in values.items()})
         update = {'$set': {'runtime.pending': None, 'runtime.martingale_step': next_step,
-                           'runtime.sizing_signature': order.get('sizing_signature'),
-                           'runtime.chain_loss': chain_loss}}
+                           'runtime.sizing_signature': order.get('sizing_signature')}}
         if inc:
             update['$inc'] = inc
         async with self.lock:
@@ -138,7 +141,7 @@ class Repository:
             if r.matched_count != 1:
                 raise RuntimeError('result_already_saved_or_lease_lost')
             self.doc['runtime'].update(pending=None, martingale_step=next_step,
-                                       sizing_signature=order.get('sizing_signature'), chain_loss=chain_loss)
+                                       sizing_signature=order.get('sizing_signature'))
             for path, v in inc.items():
                 parts = path.split('.')
                 node = self.doc
@@ -154,27 +157,23 @@ class Repository:
 
     async def reset_step(self):
         async with self.lock:
-            r = await self.collection.update_one(self.fence(), {'$set': {'runtime.martingale_step': 0, 'runtime.chain_loss': 0.0}})
+            r = await self.collection.update_one(self.fence(), {'$set': {'runtime.martingale_step': 0}})
             if r.matched_count != 1:
                 raise RuntimeError('lease_lost')
             self.doc['runtime']['martingale_step'] = 0
-            self.doc['runtime']['chain_loss'] = 0.0
 
     async def reset_stats(self):
         """Zero all statistics and the martingale step (ledger reset on user request)."""
         async with self.lock:
-            if self.doc['runtime'].get('pending'):
-                raise ValueError('يوجد أمر غير محسوم؛ انتظر إنهاءه قبل التصفير')
             update = {'$set': {'session_stats': empty_stats(),
                                'account_stats': {m: empty_stats() for m in MODES},
-                               'runtime.martingale_step': 0, 'runtime.chain_loss': 0.0}}
+                               'runtime.martingale_step': 0}}
             r = await self.collection.update_one(self.fence(), update)
             if r.matched_count != 1:
                 raise RuntimeError('lease_lost')
             self.doc['session_stats'] = empty_stats()
             self.doc['account_stats'] = {m: empty_stats() for m in MODES}
             self.doc['runtime']['martingale_step'] = 0
-            self.doc['runtime']['chain_loss'] = 0.0
 
     async def close(self):
         if self.client:

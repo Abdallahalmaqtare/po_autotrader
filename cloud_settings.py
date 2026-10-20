@@ -6,6 +6,7 @@ import os
 from urllib.parse import urlparse
 import config
 from forex_assets import FOREX_OTC, SYMBOL_NAMES
+from risk_limits import risk_defaults, validate_risk
 
 MODES = ('PRACTICE', 'REAL')
 DURATIONS = (5, 15, 30, 60, 180, 300, 600, 900, 1800)
@@ -68,7 +69,6 @@ def defaults():
     return {
         '_id': 'current_settings', 'schema_version': 1,
         'account_mode': config.ACCOUNT_TYPE,
-        'signal_source': {'username': config.SIGNAL_BOT_USERNAME.lstrip('@'), 'history': []},
         'demo_account': {'ssid': os.getenv('PO_SSID_DEMO', ''),
                          'ws_url': os.getenv('PO_WS_URL_DEMO', config.DEMO_URL),
                          'uid': int(os.getenv('PO_UID_DEMO', '0') or 0)},
@@ -83,6 +83,7 @@ def defaults():
                         result_timeout_extra=config.RESULT_TIMEOUT_EXTRA,
                         balance_settle_seconds=config.BALANCE_SETTLE_SECONDS,
                         loss_recheck_seconds=config.LOSS_RECHECK_SECONDS),
+        'risk': risk_defaults(),
         'session_stats': empty_stats(),
         'account_stats': {m: empty_stats() for m in MODES},
         'runtime': {'pending': None, 'martingale_step': 0},
@@ -92,6 +93,7 @@ def defaults():
 def validate_document(doc):
     if doc.get('account_mode') not in MODES:
         raise ValueError('نوع حساب غير صالح')
+    validate_risk(doc.get('risk', risk_defaults()))
     t = doc['trading']
     if t.get('asset') not in SYMBOL_NAMES:
         raise ValueError('يُسمح بأزواج فوركس OTC الموجودة في القائمة فقط')
@@ -110,17 +112,9 @@ def validate_document(doc):
 
 def patched(doc, fields):
     d = deepcopy(doc)
-    allowed = {'account_mode', 'signal_source.username', 'signal_source.history'} | {'trading.' + k for k in defaults()['trading']} | {
+    allowed = {'account_mode'} | {'risk.' + k for k in risk_defaults()} | {'trading.' + k for k in defaults()['trading']} | {
         f'{kind}_account.{key}' for kind in ('real', 'demo') for key in ('ssid', 'ws_url', 'uid')}
     for path, value in fields.items():
-        if path == 'signal_source.username':
-            from telegram_bootstrap import signal_username
-            value = signal_username(value)
-        elif path == 'signal_source.history':
-            from telegram_bootstrap import signal_username
-            if not isinstance(value, list) or len(value) > 12:
-                raise ValueError('قائمة المصادر غير صالحة')
-            value = [signal_username(v) for v in value]
         if path not in allowed:
             raise ValueError('حقل إعداد غير مسموح')
         parts = path.split('.')
