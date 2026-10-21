@@ -3,6 +3,7 @@ Pictures ship in the deployment: no remote URL, API generation, Pillow or downlo
 is needed at runtime. Telegram file_ids are cached for this Bot instance only.
 """
 import asyncio
+from runtime_support import timestamp_print as print
 from dataclasses import dataclass, field
 from pathlib import Path
 from contextlib import suppress
@@ -48,6 +49,8 @@ def text_chunks(text, max_units=3900):
 
 def card_for(action, text=''):
     action = action or 'home'
+    if action.startswith('cycle'):
+        return 'setup'
     if action.startswith('payout'):
         return 'limits'
     if action.startswith('recovery'):

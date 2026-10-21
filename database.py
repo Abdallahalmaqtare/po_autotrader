@@ -7,6 +7,7 @@ from pymongo import AsyncMongoClient, ReturnDocument
 from pymongo.write_concern import WriteConcern
 from cloud_settings import defaults, validate_document, patched, empty_stats, MODES
 from recovery import after_result, selected_state, reset_state, recovery_defaults
+from work_cycle import cycle_state
 
 
 def utcnow():
@@ -95,6 +96,9 @@ class Repository:
         async with self.lock:
             new_doc = patched(self.doc, fields)
             writes = deepcopy(fields)
+            if new_doc['schedule']!=self.doc['schedule']:
+                writes['runtime.cycle']=cycle_state()
+                new_doc['runtime']['cycle']=cycle_state()
             # Settings edits never overwrite finances. New sizing / recovery policy
             # explicitly cancels old recovery phases; old in-flight epochs cannot revive them.
             reset_all = (new_doc['recovery'] != self.doc['recovery'] or
@@ -114,6 +118,14 @@ class Repository:
                 raise RuntimeError('lease_lost')
             # DB first: a failed write is never reported as a saved setting.
             self.doc = new_doc
+
+    async def save_cycle(self,state,expected):
+        async with self.lock:
+            if self.doc['schedule']!=expected:return False
+            result=await self.collection.update_one(self.fence(),{'$set':{'runtime.cycle':deepcopy(state)}})
+            if result.matched_count!=1:raise RuntimeError('lease_lost')
+            self.doc['runtime']['cycle']=deepcopy(state)
+            return True
 
     async def reserve(self, order):
         async with self.lock:

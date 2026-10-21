@@ -2,6 +2,7 @@
 Engine.IO heartbeat + Socket.IO 42 and single/multiple binary JSON attachments.
 """
 import asyncio
+from runtime_support import timestamp_print as print
 import inspect
 import json
 import ssl
@@ -17,66 +18,7 @@ from account_details import positive_uid
 from payout_guard import PayoutBook, PayoutBlocked, allowed, symbol
 
 
-class EventDecoder:
-    def __init__(self):
-        self.pending = None
-
-    def feed(self, frame):
-        if isinstance(frame, bytes):
-            if not self.pending:
-                try:
-                    raw=json.loads(frame.decode('utf-8'))
-                    if isinstance(raw,list) and raw and isinstance(raw[0],list) and len(raw[0])>5 and symbol(raw[0][1]):
-                        return [['updateAssets',raw]]
-                except (ValueError,UnicodeDecodeError,TypeError):
-                    pass
-                return []
-            try:
-                value = json.loads(frame.decode('utf-8'))
-            except (ValueError, UnicodeDecodeError):
-                self.pending = None
-                return []
-            event, expected, attachments = self.pending
-            attachments.append(value)
-            if len(attachments) < expected:
-                return []
-            self.pending = None
-            def restore(obj):
-                if isinstance(obj, dict) and obj.get('_placeholder') is True:
-                    return attachments[obj['num']]
-                if isinstance(obj, list):
-                    return [restore(v) for v in obj]
-                if isinstance(obj, dict):
-                    return {k: restore(v) for k, v in obj.items()}
-                return obj
-            try:
-                return [restore(event)]
-            except (IndexError, KeyError, TypeError):
-                return []
-        if isinstance(frame,str) and frame.startswith('[['):
-            try:
-                raw=json.loads(frame)
-                if raw and isinstance(raw[0],list) and len(raw[0])>5 and symbol(raw[0][1]):
-                    return [['updateAssets',raw]]
-            except (ValueError,TypeError):
-                pass
-        if frame.startswith('45') and '-' in frame:
-            try:
-                n, data = frame[2:].split('-', 1)
-                n = int(n)
-                obj = json.loads(data)
-                if not 1 <= n <= 10:
-                    return []
-                self.pending = (obj, n, [])
-            except (ValueError, TypeError):
-                self.pending = None
-            return []
-        if frame.startswith('42'):
-            try:
-                return [json.loads(frame[2:])]
-            except ValueError:
-                return []
-        return []
+from wire_decoder import EventDecoder
 
 
 class CloudPocket(PocketOptionWS):
@@ -91,6 +33,7 @@ class CloudPocket(PocketOptionWS):
         self.balance_at = 0.0
         self.saw_other_account_balance = False
         self.server_uid = None
+        self._payout_log_at = 0.0
 
     def _build_auth_frame(self):
         return auth_frame(self.credentials['ssid'], self.mode, self.credentials.get('uid', 0))
@@ -102,7 +45,11 @@ class CloudPocket(PocketOptionWS):
         PO_ACCOUNT_MISMATCH instead of a generic missing balance."""
         if not isinstance(event, list) or len(event) < 2:
             return
+        revision=self.payout_book.revision
         self.payout_book.feed(event)
+        if self.payout_book.revision!=revision and time.monotonic()-self._payout_log_at>10:
+            self._payout_log_at=time.monotonic()
+            print(f'[PAYOUT] parsed assets={len(self.payout_book.quotes)}; account={self.mode}',flush=True)
         name, payload = event[:2]
         if not isinstance(payload, dict):
             return

@@ -1,12 +1,15 @@
 """Control-layer payout guard and MetaTrading selection; no order API here."""
 import asyncio
+from runtime_support import timestamp_print as print
 from copy import deepcopy
 from contextlib import suppress
 import time
 import config
 from diagnostics import SafeIssue
 from meta_navigation import NavigationError
-from payout_guard import allowed, policy_text
+from payout_guard import allowed, policy_text, payout_diagnostic
+from work_cycle import transition, cycle_state
+from risk_limits import risk_state
 
 
 class PayoutWorkflow:
@@ -17,6 +20,27 @@ class PayoutWorkflow:
 
     def payout_status(self):
         return policy_text(self.repo.doc,self.payout_book(),self.payout_note)
+
+    async def refresh_payout_ui(self):
+        async with self.operations:
+            if self.running:
+                self.payout_refresh_requested=True
+                return self.payout_status()+'\nطُلب تجديد الجدول بين الصفقات؛ لا نقطع صفقة مفتوحة.'
+            mode=self.repo.doc['account_mode']
+            if not self.po or not self.po.connected or self.po.mode!=mode:
+                await self.connect_account()
+            else:
+                await self.po.refresh_payouts()
+            t=self.repo.doc['trading']
+            await self.po.select_asset(t['asset'],t['duration_seconds'])
+            deadline=time.monotonic()+min(config.CONNECT_TIMEOUT_SECONDS,5)
+            while time.monotonic()<deadline:
+                if self.po.payout_book.quotes.get(t['asset']) is not None:break
+                await asyncio.sleep(.1)
+            return self.payout_status()
+
+    def payout_diagnostics(self):
+        return payout_diagnostic(self.payout_book(),getattr(self.po,'decoder',None))
 
     async def synchronize_selection(self):
         """No trades. While OFF, Confirm may prepare a first signal; Start still required."""
@@ -32,7 +56,10 @@ class PayoutWorkflow:
         return 'تمت مزامنة الزوج والمدة مع MetaTrading؛ التداول لا يبدأ إلا بأمر Start.'
 
     def entry_eligible(self,t,policy,mode):
-        if self.stop_event.is_set(): return False
+        if self.stop_event.is_set() or risk_state(self.repo.doc)['reason']: return False
+        action,_=transition(self.repo.doc['schedule'],self.repo.doc['runtime'].get('cycle',cycle_state()),
+                            int(self.repo.doc['runtime'].get('martingale_step',0)),False,False,self.clock())
+        if action in ('REST','STOP'):return False
         if mode!=self.repo.doc['account_mode'] or t!=self.repo.doc['trading'] or policy!=self.repo.doc['payout']: return False
         if not self.listener.verifies(t['asset'],t['duration_seconds'],max_age=max(10,t['entry_delay_seconds']+2)): return False
         if policy['mode']=='OFF': return True
@@ -53,6 +80,12 @@ class PayoutWorkflow:
                 pass
 
     async def guard_payout(self,t,policy,mode,wait=True):
+        if wait and self.payout_refresh_requested and not self.in_flight:
+            self.payout_refresh_requested=False
+            refresh=getattr(self.po,'refresh_payouts',None)
+            if callable(refresh):
+                await refresh()
+                return False
         if policy['mode']=='OFF':
             self.payout_note=''
             return True
@@ -60,7 +93,7 @@ class PayoutWorkflow:
         quote=book.quotes.get(t['asset']) if book else None
         stale=quote is not None and time.monotonic()-quote.at>policy['max_age_seconds']
         refresh=getattr(self.po,'refresh_payouts',None)
-        if wait and stale and callable(refresh) and time.monotonic()-self.payout_refresh_at>30:
+        if wait and (stale or quote is None) and callable(refresh) and time.monotonic()-self.payout_refresh_at>30:
             self.payout_refresh_at=time.monotonic()
             self.stage='payout_refresh'
             try:

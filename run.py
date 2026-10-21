@@ -1,16 +1,19 @@
 """Render entry point: bind health port FIRST, then Mongo lease and Telegram polling."""
 import asyncio
+from runtime_support import timestamp_print as print
 import os
 import logging
 import signal
 import time
 from contextlib import suppress
+from uuid import uuid4
 from aiohttp import web
 from aiogram import Bot
 import config
 from database import Repository
 from worker import TradingWorker
 from control_bot import build_dispatcher
+from runtime_support import telegram_startup, poll_controller
 
 
 def health_application(state):
@@ -36,8 +39,8 @@ def health_application(state):
 
 
 async def keep_alive(public_url, shutdown):
-    """Self-ping /health so the Render free instance counts inbound traffic and
-    does not spin down. Interval via KEEP_ALIVE_SECONDS (default 600s, safely
+    """Best-effort self-ping /health while this process is alive. It cannot
+    wake itself after platform suspension or guarantee continuous availability. Interval via KEEP_ALIVE_SECONDS (default 600s, safely
     under Render's 15-minute idle limit). Best-effort aid; paid plan is the guarantee."""
     try:
         interval = max(60.0, float(os.getenv('KEEP_ALIVE_SECONDS', '600') or 600))
@@ -65,7 +68,7 @@ async def wait_or_shutdown(event, seconds):
 
 
 async def main():
-    logging.basicConfig(level=logging.WARNING, format='%(levelname)s %(name)s: %(message)s')
+    logging.basicConfig(level=logging.WARNING, format='[%(asctime)s.%(msecs)03d] %(levelname)s %(name)s: %(message)s',datefmt='%H:%M:%S')
     state = {'phase': 'starting', 'ready': False}
     shutdown = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -75,8 +78,8 @@ async def main():
     runner = web.AppRunner(health_application(state), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', config.PORT).start()
-    print('[APP] build=v19-payout-meta-sync', flush=True)
-    print('[APP] health server bound; starting dependencies', flush=True)
+    print('[APP] build=v20-payout-cycle-fix', flush=True)
+    print(f'[APP] health server bound port={config.PORT}; starting dependencies', flush=True)
     repo = None
     worker = None
     bot = None
@@ -94,7 +97,7 @@ async def main():
                 if await repo.acquire():
                     break
                 state['phase'] = 'standby'
-                print('[APP] standby: another instance holds Mongo lease', flush=True)
+                print('[APP] standby: previous deployment owns lease; health ready, trading/polling not started', flush=True)
             except Exception as e:
                 state['phase'] = 'database_retry'
                 print('[APP] database not ready:', type(e).__name__, flush=True)
@@ -137,9 +140,10 @@ async def main():
 
         heartbeat = asyncio.create_task(heartbeat_loop())
         # No inbound webhook, single long-polling owner. Do not drop updates.
-        await bot.delete_webhook(drop_pending_updates=False)
-        polling = asyncio.create_task(dp.start_polling(bot, handle_signals=False,
-                                                       close_bot_session=False))
+        await telegram_startup(lambda:bot.delete_webhook(drop_pending_updates=False),
+                               shutdown,'delete webhook')
+        if shutdown.is_set():return
+        polling = asyncio.create_task(poll_controller(dp,bot,shutdown))
         stop_waiter = asyncio.create_task(shutdown.wait())
         ka_url = os.getenv('RENDER_EXTERNAL_URL', '').strip().rstrip('/')
         if ka_url:
@@ -152,6 +156,8 @@ async def main():
             # Re-raise so Render sees an unsuccessful exit, without raw exception text.
             error = polling.exception()
             print('[APP] polling ended:', type(error).__name__ if error else 'completed', flush=True)
+            worker.request_stop()
+            raise RuntimeError('Controller polling ended unexpectedly') from None
     except Exception as e:
         print('[APP] startup failed:', type(e).__name__, flush=True)
         # Config error messages contain names only; safe to show required env keys.

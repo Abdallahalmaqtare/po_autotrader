@@ -15,6 +15,7 @@ from risk_limits import risk_summary
 from branded_ui import get_panels
 from recovery import recovery_text, short_summary
 from compact_stats import compact_report
+from work_cycle import cycle_text
 
 
 class AdminOnly(BaseMiddleware):
@@ -38,6 +39,7 @@ class Input(StatesGroup):
     limit = State()
     recovery_number = State()
     payout_number = State()
+    cycle_number = State()
 
 
 def kb(rows):
@@ -67,17 +69,32 @@ def settings_kb():
     return kb([[('💱 زوج التداول', 'assets:0'), ('⏱ المدة', 'duration')],
                [('💵 المبلغ الأساسي', 'amount'), ('🪜 مستويات التدبيل', 'mg')],
                [('🛟 التعزيز', 'recovery'), ('🛡 حدود الربح والخسارة', 'limits')],
-               [('📉 حماية عائد الزوج', 'payout')],
+               [('📉 حماية عائد الزوج', 'payout'), ('⏱ التشغيل والراحة', 'cycle')],
                [('⚡ التوقيتات المتقدمة', 'timing')],
                [('👤 إدارة الحسابات', 'accounts'), ('🏠 الرئيسية', 'home')]])
 
 
-def payout_kb():
-    return kb([[('◻️ تعطيل', 'payout:mode:OFF')],
-               [('⏹ إيقاف عند الانخفاض', 'payout:mode:STOP')],
-               [('🔄 تغيير الزوج تلقائياً', 'payout:mode:SWITCH')],
-               [('📉 حد الإجراء', 'payout_threshold'), ('🎯 حد الزوج البديل', 'payout_min')],
-               [('🔄 تحديث النسبة', 'payout'), ('⬅️ الإعدادات', 'settings')]])
+def payout_kb(doc=None):
+    selected=doc['payout']['mode'] if doc else None
+    mark=lambda key: '✅ ' if selected==key else ''
+    threshold=f" {doc['payout']['threshold']:g}%" if doc else ''
+    minimum=f" {doc['payout']['switch_min']:g}%" if doc else ''
+    return kb([[(mark('OFF')+'تعطيل الحماية', 'payout:mode:OFF')],
+               [(mark('STOP')+'إيقاف عند الحد', 'payout:mode:STOP'),
+                (mark('SWITCH')+'تبديل الزوج', 'payout:mode:SWITCH')],
+               [('📉 حد الإجراء ≤'+threshold, 'payout_threshold'), ('🎯 عائد البديل ≥'+minimum, 'payout_min')],
+               [('📡 جلب العائد من المنصة', 'payout_refresh')],
+               [('🧪 تشخيص القراءة', 'payout_diagnostic')],
+               [('⬅️ الإعدادات', 'settings')]])
+
+
+def cycle_kb():
+    return kb([[('◻️ بدون وقت', 'cycle:mode:OFF')],
+               [('⏹ توقف بعد المدة', 'cycle:mode:STOP'), ('🔁 تشغيل وراحة', 'cycle:mode:REPEAT')],
+               [('▶️ مدة التشغيل', 'cycle_run'), ('☕ مدة الراحة', 'cycle_rest')],
+               [('🪜 أكمل السلسلة', 'cycle:finish:LADDER'), ('📍 الصفقة فقط', 'cycle:finish:ORDER')],
+               [('🛡 حدود الربح والخسارة', 'limits')],
+               [('🔄 الحالة', 'cycle'), ('⬅️ الإعدادات', 'settings')]])
 
 
 def timing_kb():
@@ -101,16 +118,15 @@ def limits_kb():
     return kb([[('♾ تقليدي — دون حدود', 'risk:TRADITIONAL')],
                [('🛡 تشغيل بحدود', 'risk:LIMITED')],
                [('🎯 حد الربح', 'limit:profit_limit'), ('🛑 حد الخسارة', 'limit:loss_limit')],
+               [('⏱ وقت التشغيل والراحة', 'cycle')],
                [('⬅️ الإعدادات', 'settings')]])
 
 
 def limits_text(doc):
-    return (risk_summary(doc) + '\n'
-            'اختر الحدود وعدّل المبالغ. التفعيل لا يصفّر الأرباح السابقة؛ '
-            'تُستخدم نفس أرقام التقرير المحفوظ لهذا الحساب. '
-            'إذا كان الحد متحققاً بالفعل يتوقف/يُمنع Start. '
-            'لبداية من الصفر استخدم تصفير السجل (يصفّر الحسابين).\n'
-            'التوقف يمنع الدخول الجديد بعد حسم الصفقة؛ مبلغ الصفقة الأخيرة قد يتجاوز الحد.')
+    p=doc['risk'];s=doc['account_stats'][doc['account_mode']]
+    return (f"🛡 حدود الربح والخسارة\nالوضع: {'بحدود' if p['mode']=='LIMITED' else 'تقليدي'}\n"
+            f"🎯 حد الربح: +${p['profit_limit']:g}\n🛑 حد الخسارة: -${p['loss_limit']:g}\n"
+            f"الصافي الحالي: ${s['net_pnl']:+.2f}\nأول حد مالي متحقق يمنع الدخول التالي.")
 
 
 def accounts_kb():
@@ -200,6 +216,8 @@ def build_dispatcher(repo, worker, bot):
             if action == 'status':
                 text = (account_text(repo.doc, worker.po) + risk_summary(repo.doc) +
                         f"المرحلة: {worker.stage}\n"
+                        +cycle_text(repo.doc)+'\n'+
+
                         f"WebSocket: {'متصل' if worker.po and worker.po.connected else 'غير متصل'}\n"
                         f"MongoDB writer: {'فعال' if repo.leader else 'غير فعال'}\n"
                         f"الزوج: {repo.doc['trading']['asset']}\n"
@@ -209,13 +227,47 @@ def build_dispatcher(repo, worker, bot):
                     text += '\n\n' + worker.diagnostic.public_text()
                 rows = [[('🔍 مراجعة الأمر المعلّق', 'review')], [('⬅️ الرئيسية', 'home')]] if worker.pending else None
                 return await panel(bot, cb, text, kb(rows) if rows else home())
+            if action == 'payout_refresh':
+                text=await worker.refresh_payout_ui()
+                return await panel(bot,cb,text,payout_kb(repo.doc))
+            if action == 'payout_diagnostic':
+                return await panel(bot,cb,worker.payout_status()+'\n\n'+worker.payout_diagnostics(),payout_kb(repo.doc))
+            if action == 'cycle':
+                return await panel(bot,cb,cycle_text(repo.doc),cycle_kb())
+            if action.startswith('cycle:finish:'):
+                value=action.split(':')[2]
+                if value not in ('ORDER','LADDER'):raise ValueError('قاعدة وقت غير صالحة')
+                await worker.change({'schedule.finish':value})
+                return await panel(bot,cb,cycle_text(repo.doc),cycle_kb())
+            if action.startswith('cycle:mode:'):
+                value=action.split(':')[2]
+                if value not in ('OFF','STOP','REPEAT'):raise ValueError('وضع وقت غير صالح')
+                await worker.change({'schedule.mode':value})
+                return await panel(bot,cb,cycle_text(repo.doc),cycle_kb())
+            if action in ('cycle_run','cycle_rest'):
+                key='run_minutes' if action=='cycle_run' else 'rest_minutes'
+                return await panel(bot,cb,'اختر المدة بالدقائق',kb([
+                    [(f'{v} د',f'cycle:value:{key}:{v}') for v in (5,10,15)],
+                    [(f'{v} د',f'cycle:value:{key}:{v}') for v in (30,60)],
+                    [('✍️ مدة مخصصة','cycle:edit:'+key)],[('⬅️ التشغيل والراحة','cycle')]]))
+            if action.startswith('cycle:value:'):
+                _,_,key,value=action.split(':')
+                if key not in ('run_minutes','rest_minutes'):raise ValueError('مدة غير صالحة')
+                await worker.change({'schedule.'+key:valid_number(value,.01,10080)})
+                return await panel(bot,cb,cycle_text(repo.doc),cycle_kb())
+            if action.startswith('cycle:edit:'):
+                key=action.split(':')[2]
+                if key not in ('run_minutes','rest_minutes'):raise ValueError('مدة غير صالحة')
+                await state.set_state(Input.cycle_number)
+                await state.update_data(key=key)
+                return await panel(bot,cb,'أرسل المدة بالدقائق، مثال 10. /cancel للإلغاء.',None)
             if action == 'payout':
-                return await panel(bot, cb, worker.payout_status(), payout_kb())
+                return await panel(bot, cb, worker.payout_status(), payout_kb(repo.doc))
             if action.startswith('payout:mode:'):
                 value=action.split(':')[2]
                 if value not in ('OFF','STOP','SWITCH'): raise ValueError('وضع حماية غير صالح')
                 await worker.change({'payout.mode':value})
-                return await panel(bot, cb, worker.payout_status(), payout_kb())
+                return await panel(bot, cb, worker.payout_status(), payout_kb(repo.doc))
             if action in ('payout_threshold','payout_min'):
                 key='threshold' if action=='payout_threshold' else 'switch_min'
                 values=(70,80,84,85,90) if key=='threshold' else (85,90,92,95)
@@ -227,7 +279,7 @@ def build_dispatcher(repo, worker, bot):
                 _,_,key,raw=action.split(':')
                 if key not in ('threshold','switch_min'): raise ValueError('خيار نسبة غير صالح')
                 await worker.change({'payout.'+key:valid_number(raw,0,100)})
-                return await panel(bot, cb, worker.payout_status(), payout_kb())
+                return await panel(bot, cb, worker.payout_status(), payout_kb(repo.doc))
             if action.startswith('payout:edit:'):
                 key=action.split(':')[2]
                 if key not in ('threshold','switch_min'): raise ValueError('خيار نسبة غير صالح')
@@ -443,6 +495,19 @@ def build_dispatcher(repo, worker, bot):
             await ui.show('نسبة غير صالحة؛ البديل يجب أن يتجاوز حد الإجراء. /cancel للإلغاء.',view='payout')
         except Exception as exc:
             await ui.show('تعذّر الحفظ: '+type(exc).__name__,payout_kb(),view='payout')
+
+    @dp.message(Input.cycle_number)
+    async def cycle_input(msg: Message,state: FSMContext):
+        try:
+            key=(await state.get_data()).get('key')
+            if key not in ('run_minutes','rest_minutes'):raise ValueError('مدة غير صالحة')
+            await worker.change({'schedule.'+key:valid_number(msg.text or '',.01,10080)})
+            await state.clear()
+            await ui.show(cycle_text(repo.doc),cycle_kb(),view='cycle')
+        except (ValueError,TypeError):
+            await ui.show('أرسل مدة موجبة بالدقائق أو /cancel.',view='cycle')
+        except Exception as exc:
+            await ui.show('تعذّر الحفظ: '+type(exc).__name__,cycle_kb(),view='cycle')
 
     @dp.message(Input.number)
     async def number_input(msg: Message, state: FSMContext):

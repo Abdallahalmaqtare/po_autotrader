@@ -3,6 +3,7 @@ Stopping forbids new entries immediately; pending order is settled if time allow
 Account switches close immediately and preserve unresolved orders for manual review.
 """
 import asyncio
+from runtime_support import timestamp_print as print
 from contextlib import suppress
 from copy import deepcopy
 from uuid import uuid4
@@ -16,13 +17,14 @@ from synchronized_signals import SynchronizedSignalListener as SignalListener
 from meta_navigation import NavigationError
 from payout_guard import PayoutBlocked
 from payout_workflow import PayoutWorkflow
+from work_cycle import CycleWorkflow, cycle_state, transition
 from telegram_bootstrap import session_from_env, signal_username
 from diagnostics import SafeIssue, diagnose_exception
 from risk_limits import risk_state, limit_stop_text
 from recovery import sizing, selected_state
 
 
-class TradingWorker(PayoutWorkflow):
+class TradingWorker(PayoutWorkflow, CycleWorkflow):
     def __init__(self, repo, po_factory=CloudPocket, telegram_factory=TelegramClient):
         self.repo = repo
         self.po_factory = po_factory
@@ -45,6 +47,9 @@ class TradingWorker(PayoutWorkflow):
         self.selection_changed = asyncio.Event()
         self.payout_note = ''
         self.payout_refresh_at = 0.0
+        self.payout_refresh_requested=False
+        self.cycle_note=''
+        self.cycle_force_rest=False
 
     @property
     def pending(self):
@@ -216,6 +221,8 @@ class TradingWorker(PayoutWorkflow):
                 raise ValueError(diagnostic.public_text()) from None
             self.diagnostic = None
             self.last_error = ''
+            if self.repo.doc['runtime']['cycle']['phase']=='DONE':
+                await self.repo.save_cycle(cycle_state(),deepcopy(self.repo.doc['schedule']))
             self.stop_event.clear()
             self.running = True  # set before task creation to prevent duplicate starts
             self.stage = 'starting'
@@ -233,7 +240,7 @@ class TradingWorker(PayoutWorkflow):
                 if self.po:
                     await self.po.close()
             await self.repo.update(fields)
-            if selection_requested or any(key.startswith('payout.') for key in fields):
+            if selection_requested or any(key.startswith(('payout.','schedule.')) for key in fields):
                 self.selection_changed.set()
             if await self.enforce_limits():
                 return 'تم الحفظ.\n' + limit_stop_text(self.repo.doc)
@@ -291,6 +298,8 @@ class TradingWorker(PayoutWorkflow):
                     raise RuntimeError('lease_lost')
                 if await self.enforce_limits():
                     break
+                if not await self.cycle_gate(int(self.repo.doc['runtime'].get('martingale_step',0))):
+                    continue
                 if self.pending:
                     await self.repo.acknowledge_pending()
                     print('[WORKER] stale pending marker auto-archived; continuing', flush=True)
@@ -339,9 +348,10 @@ class TradingWorker(PayoutWorkflow):
                 signal_task=asyncio.create_task(self.listener.next_direction(t['asset'],t['duration_seconds'],self.stop_event))
                 changed_task=asyncio.create_task(self.selection_changed.wait())
                 payout_task=asyncio.create_task(self.wait_payout_change(t,payout_policy))
+                cycle_task=asyncio.create_task(self.wait_cycle_boundary(mm.step))
                 try:
-                    done,_=await asyncio.wait((signal_task,changed_task,payout_task),return_when=asyncio.FIRST_COMPLETED)
-                    if changed_task in done or payout_task in done:
+                    done,_=await asyncio.wait((signal_task,changed_task,payout_task,cycle_task),return_when=asyncio.FIRST_COMPLETED)
+                    if changed_task in done or payout_task in done or cycle_task in done:
                         continue
                     try:
                         direction=await signal_task
@@ -351,7 +361,7 @@ class TradingWorker(PayoutWorkflow):
                         await self._pause(2)
                         continue
                 finally:
-                    for task in (signal_task,changed_task,payout_task):
+                    for task in (signal_task,changed_task,payout_task,cycle_task):
                         if not task.done(): task.cancel()
                         with suppress(asyncio.CancelledError,Exception):
                             await task
@@ -371,6 +381,8 @@ class TradingWorker(PayoutWorkflow):
                     continue  # fresh connection needs a fresh signal, not a replay
                 if await self.enforce_limits():
                     break
+                if not await self.cycle_gate(mm.step):
+                    continue
                 if not await self.guard_payout(t,payout_policy,mode,wait=False):
                     continue
                 if not self.listener.verifies(t['asset'],t['duration_seconds'],max_age=max(10,t['entry_delay_seconds']+2)):
@@ -419,8 +431,11 @@ class TradingWorker(PayoutWorkflow):
                     self.stage = 'result_save'
                     await self.repo.resolve(order, None, before, self.po.balance, mm.step)
                     self.in_flight = False
+                    self.cycle_force_rest=True
                     if await self.enforce_limits():
                         break
+                    if not await self.cycle_gate(mm.step):
+                        continue
                     self.stage = 'delay'
                     await self._pause(t['loop_delay_seconds'])
                     continue
@@ -444,6 +459,8 @@ class TradingWorker(PayoutWorkflow):
                 self.in_flight = False
                 if await self.enforce_limits():
                     break
+                if not await self.cycle_gate(mm.step):
+                    continue
                 self.stage = 'delay'
                 await self._pause(t['loop_delay_seconds'])
         except asyncio.CancelledError:
@@ -454,7 +471,7 @@ class TradingWorker(PayoutWorkflow):
         finally:
             self.running = False
             self.in_flight = False
-            if self.stage not in ('error', 'error_review', 'limit_reached', 'payout_stopped'):
+            if self.stage not in ('error', 'error_review', 'limit_reached', 'payout_stopped', 'time_limit_reached'):
                 self.stage = 'stopped'
 
     async def close(self):

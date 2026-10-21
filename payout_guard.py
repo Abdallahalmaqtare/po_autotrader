@@ -53,6 +53,7 @@ class Quote:
     at: float
     tradable: object = None
     durations: object = None
+    hint_durations: object = None
 
 
 class PayoutBook:
@@ -62,18 +63,26 @@ class PayoutBook:
         self.quotes={}
         self.revision=0
         self.updated=asyncio.Event()
+        self.events_seen=0
+        self.rows_seen=0
+        self.last_event=''
+        self.last_issue=''
 
     def clear(self):
         self.quotes.clear(); self.revision+=1; self.updated.set()
 
     def feed(self,event):
         if not isinstance(event,list) or len(event)<2 or event[0] not in self.EVENTS: return
+        self.events_seen+=1;self.last_event=event[0]
         data=event[1]
-        if isinstance(data,dict):
+        for _ in range(5):
+            if not isinstance(data,dict):break
             if 'isDemo' in data:
                 demo=flag(data['isDemo'])
                 if demo is None or demo != (self.mode=='PRACTICE'): return
-            data=data.get('assets',data.get('data',data))
+            nested=next((data[k] for k in ('assets','data','result') if k in data and isinstance(data[k],(dict,list))),None)
+            if nested is None:break
+            data=nested
         if isinstance(data,dict) and any(k in data for k in ('symbol','asset')):
             entries=[data]
         elif isinstance(data,dict):
@@ -85,21 +94,23 @@ class PayoutBook:
             entries=[data] if len(data)>5 and isinstance(data[1],str) and symbol(data[1]) else data
         else: return
         for item in entries:
-            active=None; durations=None
+            self.rows_seen+=1
+            active=None; durations=None; hints=None
             if isinstance(item,list) and len(item)>=6:
                 sym=symbol(item[1]); raw=item[5]
                 active=flag(item[14]) if len(item)>14 else None
                 if len(item)>15 and isinstance(item[15],list):
                     times=[r.get('time') for r in item[15] if isinstance(r,dict) and isinstance(r.get('time'),(int,float))]
-                    durations=set(int(x) for x in times) or None
+                    hints=set(int(x) for x in times) or None
             elif isinstance(item,dict):
                 if 'isDemo' in item and flag(item['isDemo']) != (self.mode=='PRACTICE'): continue
                 sym=symbol(item.get('symbol',item.get('asset')))
                 raw=item.get('payout',item.get('profit',item.get('percent')))
                 for key in ('tradable','isActive','is_active','enabled'):
                     if key in item: active=flag(item[key]); break
-                if isinstance(item.get('expirations'),list):
-                    vals=[x.get('time') if isinstance(x,dict) else x for x in item['expirations']]
+                explicit=item.get('supported_durations',item.get('durations'))
+                if isinstance(explicit,list):
+                    vals=[x.get('time') if isinstance(x,dict) else x for x in explicit]
                     durations={int(x) for x in vals if isinstance(x,(int,float))} or None
             else: continue
             if not sym: continue
@@ -119,7 +130,7 @@ class PayoutBook:
             if event[0] in ('updateAsset','updatePayout','updatePayouts') and previous:
                 if active is None: active=previous.tradable
                 if durations is None: durations=previous.durations
-            self.quotes[sym]=Quote(rates,time.monotonic(),active,durations)
+            self.quotes[sym]=Quote(rates,time.monotonic(),active,durations,hints)
             self.revision+=1
             self.updated.set()
 
@@ -148,13 +159,37 @@ def allowed(book,asset,duration,policy):
     return rate is not None and rate>policy['threshold']
 
 
+def quote_detail(book,asset,duration,max_age):
+    if book is None: return 'DISCONNECTED',None,None
+    quote=book.quotes.get(asset)
+    if quote is None: return ('NO_TABLE' if not book.quotes else 'ASSET_MISSING'),None,None
+    age=max(0,time.monotonic()-quote.at)
+    raw=quote.payouts.get(duration,quote.payouts.get(None))
+    if age>max_age:return 'STALE',raw,age
+    if quote.tradable is False:return 'CLOSED',raw,age
+    if quote.durations is not None and duration not in quote.durations:return 'DURATION',raw,age
+    if raw is None:return 'DURATION',raw,age
+    return 'KNOWN',raw,age
+
+
 def policy_text(doc,book=None,status=''):
-    p=doc['payout']; t=doc['trading']
-    labels={'OFF':'غير مفعّلة','STOP':'إيقاف التداول','SWITCH':'تغيير الزوج تلقائياً'}
-    rate=book.rate(t['asset'],t['duration_seconds'],p['max_age_seconds']) if book else None
-    shown=f'{rate:g}%' if rate is not None else 'غير متاح / غير محدّث'
-    return (f"📉 حماية عائد الزوج\nالوضع: {labels[p['mode']]}\n"
-            f"الإجراء عند العائد ≤ {p['threshold']:g}%\n"
-            f"أقل عائد للبديل: {p['switch_min']:g}%\n"
-            f"الزوج: {t['asset']} | العائد الحالي: {shown}\n" +
-            (status+'\n' if status else '') + 'القياس من المنصة، وليس Accuracy للإشارة.')
+    p=doc['payout'];t=doc['trading']
+    labels={'OFF':'◻️ معطلة','STOP':'⏹ إيقاف','SWITCH':'🔄 تبديل تلقائي'}
+    code,raw,age=quote_detail(book,t['asset'],t['duration_seconds'],p['max_age_seconds'])
+    reasons={'DISCONNECTED':'غير متصل بالمنصة','NO_TABLE':'لم يصل جدول العائد بعد',
+             'ASSET_MISSING':'الزوج غير موجود في الجدول المستلم','STALE':'القراءة قديمة',
+             'CLOSED':'الزوج مغلق','DURATION':'لا يوجد عائد صريح لهذه المدة','KNOWN':'قراءة حديثة'}
+    shown=f'{raw:g}%' if raw is not None else '—'
+    lines=['📉 حماية عائد الزوج',f"{labels[p['mode']]} | {t['asset']} | {t['duration_seconds']}ث",
+           f'العائد المستلم: {shown}',f"حالة البيانات: {reasons[code]}",
+           f"الإجراء عند ≤ {p['threshold']:g}% | البديل ≥ {p['switch_min']:g}%"]
+    if age is not None:lines.append(f'عمر القراءة: {age:.0f}ث')
+    if status:lines.append(status)
+    return '\n'.join(lines)
+
+
+def payout_diagnostic(book,decoder=None):
+    if book is None:return 'تشخيص العائد: لا يوجد اتصال نشط بالحساب المختار.'
+    stats=getattr(decoder,'stats',{}) if decoder else {}
+    return (f'فحص العائد: أحداث={book.events_seen} | صفوف={book.rows_seen} | أصول={len(book.quotes)}\n'
+            f"فك الحزم: ناجحة={stats.get('decoded',0)} | مرفقات={stats.get('attachments',0)} | مرفوضة={stats.get('rejected',0)}")
