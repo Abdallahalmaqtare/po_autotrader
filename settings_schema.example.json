@@ -33,5 +33,11 @@
     "increment": 1.0,
     "exit_mode": "RECOVER_LOSS",
     "win_target": 3
+  },
+  "payout": {
+    "mode": "OFF",
+    "threshold": 84.0,
+    "switch_min": 85.0,
+    "max_age_seconds": 60.0
   }
 }

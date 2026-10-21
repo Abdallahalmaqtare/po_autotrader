@@ -37,6 +37,7 @@ class Input(StatesGroup):
     number = State()
     limit = State()
     recovery_number = State()
+    payout_number = State()
 
 
 def kb(rows):
@@ -66,8 +67,17 @@ def settings_kb():
     return kb([[('💱 زوج التداول', 'assets:0'), ('⏱ المدة', 'duration')],
                [('💵 المبلغ الأساسي', 'amount'), ('🪜 مستويات التدبيل', 'mg')],
                [('🛟 التعزيز', 'recovery'), ('🛡 حدود الربح والخسارة', 'limits')],
+               [('📉 حماية عائد الزوج', 'payout')],
                [('⚡ التوقيتات المتقدمة', 'timing')],
                [('👤 إدارة الحسابات', 'accounts'), ('🏠 الرئيسية', 'home')]])
+
+
+def payout_kb():
+    return kb([[('◻️ تعطيل', 'payout:mode:OFF')],
+               [('⏹ إيقاف عند الانخفاض', 'payout:mode:STOP')],
+               [('🔄 تغيير الزوج تلقائياً', 'payout:mode:SWITCH')],
+               [('📉 حد الإجراء', 'payout_threshold'), ('🎯 حد الزوج البديل', 'payout_min')],
+               [('🔄 تحديث النسبة', 'payout'), ('⬅️ الإعدادات', 'settings')]])
 
 
 def timing_kb():
@@ -199,6 +209,31 @@ def build_dispatcher(repo, worker, bot):
                     text += '\n\n' + worker.diagnostic.public_text()
                 rows = [[('🔍 مراجعة الأمر المعلّق', 'review')], [('⬅️ الرئيسية', 'home')]] if worker.pending else None
                 return await panel(bot, cb, text, kb(rows) if rows else home())
+            if action == 'payout':
+                return await panel(bot, cb, worker.payout_status(), payout_kb())
+            if action.startswith('payout:mode:'):
+                value=action.split(':')[2]
+                if value not in ('OFF','STOP','SWITCH'): raise ValueError('وضع حماية غير صالح')
+                await worker.change({'payout.mode':value})
+                return await panel(bot, cb, worker.payout_status(), payout_kb())
+            if action in ('payout_threshold','payout_min'):
+                key='threshold' if action=='payout_threshold' else 'switch_min'
+                values=(70,80,84,85,90) if key=='threshold' else (85,90,92,95)
+                rows=[[(f'{value}%',f'payout:value:{key}:{value}') for value in values[i:i+3]]
+                      for i in range(0,len(values),3)]
+                rows += [[('✍️ نسبة مخصصة','payout:edit:'+key)],[('⬅️ حماية العائد','payout')]]
+                return await panel(bot, cb, 'الإجراء عند النسبة أو أقل' if key=='threshold' else 'أقل عائد للزوج البديل',kb(rows))
+            if action.startswith('payout:value:'):
+                _,_,key,raw=action.split(':')
+                if key not in ('threshold','switch_min'): raise ValueError('خيار نسبة غير صالح')
+                await worker.change({'payout.'+key:valid_number(raw,0,100)})
+                return await panel(bot, cb, worker.payout_status(), payout_kb())
+            if action.startswith('payout:edit:'):
+                key=action.split(':')[2]
+                if key not in ('threshold','switch_min'): raise ValueError('خيار نسبة غير صالح')
+                await state.set_state(Input.payout_number)
+                await state.update_data(key=key)
+                return await panel(bot,cb,'أرسل النسبة بين 0 و100، مثال 84. /cancel للإلغاء.',None)
             if action == 'tools':
                 return await panel(bot, cb, '🧰 الأدوات والصيانة', tools_kb())
             if action == 'timing':
@@ -395,6 +430,19 @@ def build_dispatcher(repo, worker, bot):
             await ui.show('قيمة غير صالحة؛ أرسل رقماً ضمن النطاق أو /cancel.', view='recovery')
         except Exception as exc:
             await ui.show('تعذّر الحفظ: '+type(exc).__name__, recovery_kb(), view='recovery')
+
+    @dp.message(Input.payout_number)
+    async def payout_input(msg: Message, state: FSMContext):
+        try:
+            key=(await state.get_data()).get('key')
+            if key not in ('threshold','switch_min'): raise ValueError('خيار نسبة غير صالح')
+            await worker.change({'payout.'+key:valid_number((msg.text or '').strip().rstrip('%'),0,100)})
+            await state.clear()
+            await ui.show(worker.payout_status(),payout_kb(),view='payout')
+        except (ValueError,TypeError):
+            await ui.show('نسبة غير صالحة؛ البديل يجب أن يتجاوز حد الإجراء. /cancel للإلغاء.',view='payout')
+        except Exception as exc:
+            await ui.show('تعذّر الحفظ: '+type(exc).__name__,payout_kb(),view='payout')
 
     @dp.message(Input.number)
     async def number_input(msg: Message, state: FSMContext):

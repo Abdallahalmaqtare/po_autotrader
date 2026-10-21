@@ -8,6 +8,7 @@ import config
 from forex_assets import FOREX_OTC, SYMBOL_NAMES, STORED_ASSET_NAMES
 from risk_limits import risk_defaults, validate_risk
 from recovery import recovery_defaults, state_defaults, validate_recovery
+from payout_guard import payout_defaults, validate_payout
 
 MODES = ('PRACTICE', 'REAL')
 DURATIONS = (5, 15, 30, 60, 180, 300, 600, 900, 1800)
@@ -86,6 +87,7 @@ def defaults():
                         loss_recheck_seconds=config.LOSS_RECHECK_SECONDS),
         'risk': risk_defaults(),
         'recovery': recovery_defaults(),
+        'payout': payout_defaults(),
         'session_stats': empty_stats(),
         'account_stats': {m: empty_stats() for m in MODES},
         'runtime': {'pending': None, 'martingale_step': 0,
@@ -97,6 +99,7 @@ def validate_document(doc):
     if doc.get('account_mode') not in MODES:
         raise ValueError('نوع حساب غير صالح')
     validate_risk(doc.get('risk', risk_defaults()))
+    validate_payout(doc.get('payout', payout_defaults()))
     t = doc['trading']
     if t.get('asset') not in STORED_ASSET_NAMES:
         raise ValueError('يُسمح بأزواج فوركس OTC الموجودة في القائمة فقط')
@@ -118,7 +121,7 @@ def patched(doc, fields):
     d = deepcopy(doc)
     if 'trading.asset' in fields and fields['trading.asset'] not in SYMBOL_NAMES:
         raise ValueError('اختر زوجاً من الصفحات الخمس المطابقة لبوت الإشارات')
-    allowed = {'account_mode'} | {'recovery.' + k for k in recovery_defaults()} | {'risk.' + k for k in risk_defaults()} | {'trading.' + k for k in defaults()['trading']} | {
+    allowed = {'account_mode'} | {'payout.' + k for k in payout_defaults()} | {'recovery.' + k for k in recovery_defaults()} | {'risk.' + k for k in risk_defaults()} | {'trading.' + k for k in defaults()['trading']} | {
         f'{kind}_account.{key}' for kind in ('real', 'demo') for key in ('ssid', 'ws_url', 'uid')}
     for path, value in fields.items():
         if path not in allowed:

@@ -48,6 +48,8 @@ def text_chunks(text, max_units=3900):
 
 def card_for(action, text=''):
     action = action or 'home'
+    if action.startswith('payout'):
+        return 'limits'
     if action.startswith('recovery'):
         return 'setup'
     if action == 'timing':

@@ -4,6 +4,7 @@ from pathlib import Path
 import traceback
 
 MESSAGES = {
+    'META_SYNC_FAILED': ('لم تكتمل مزامنة الزوج والمدة مع مصدر الإشارات', 'لن يُرسل أمر قبل تطابق الزوج والمدة. راجع محادثة المصدر وزر Trade/OTC/Back وتوفر المدة.'),
     'TG_SESSION_INVALID': ('جلسة Telethon غير صالحة', 'أنشئ TELEGRAM_STRING_SESSION بواسطة session_tool.py؛ لا تستخدم Bot Token أو SSID أو اسم ملف الجلسة.'),
     'TG_SESSION_UNAUTHORIZED': ('جلسة تيليجرام غير مخوّلة أو أُلغيت', 'أعد تسجيل الدخول محلياً عبر session_tool.py --login ثم حدّث TELEGRAM_STRING_SESSION وأعد النشر.'),
     'TG_CONNECT_FAILED': ('تعذّر اتصال حساب تيليجرام', 'تحقق من الشبكة وصلاحية جلسة Telethon ثم أعد المحاولة.'),

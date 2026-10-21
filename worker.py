@@ -12,14 +12,17 @@ import config
 from cloud_settings import auth_frame
 from cloud_transport import CloudPocket
 from martingale import MoneyManager
-from telegram_signal import SignalListener
+from synchronized_signals import SynchronizedSignalListener as SignalListener
+from meta_navigation import NavigationError
+from payout_guard import PayoutBlocked
+from payout_workflow import PayoutWorkflow
 from telegram_bootstrap import session_from_env, signal_username
 from diagnostics import SafeIssue, diagnose_exception
 from risk_limits import risk_state, limit_stop_text
 from recovery import sizing, selected_state
 
 
-class TradingWorker:
+class TradingWorker(PayoutWorkflow):
     def __init__(self, repo, po_factory=CloudPocket, telegram_factory=TelegramClient):
         self.repo = repo
         self.po_factory = po_factory
@@ -39,6 +42,9 @@ class TradingWorker:
         self._last_notice = None
         self._notice_at = 0.0
         self._last_limit_notice = None
+        self.selection_changed = asyncio.Event()
+        self.payout_note = ''
+        self.payout_refresh_at = 0.0
 
     @property
     def pending(self):
@@ -220,12 +226,15 @@ class TradingWorker:
         """Serialized account changes; ordinary trading changes start next cycle."""
         async with self.operations:
             was_running = self.running
+            selection_requested = any(key in fields for key in ('trading.asset','trading.duration_seconds'))
             if reconnect:
                 # No future entries on old account. Cancel wait but keep durable pending marker.
                 await self._stop(immediate=True)
                 if self.po:
                     await self.po.close()
             await self.repo.update(fields)
+            if selection_requested or any(key.startswith('payout.') for key in fields):
+                self.selection_changed.set()
             if await self.enforce_limits():
                 return 'تم الحفظ.\n' + limit_stop_text(self.repo.doc)
             if reconnect:
@@ -244,7 +253,15 @@ class TradingWorker:
                 if self.pending:
                     return 'تم الحفظ والاتصال بالحساب الجديد؛ التداول متوقف حتى مراجعة الأمر المعلّق في الحساب السابق.'
                 return 'تم الحفظ وإعادة الاتصال ببيانات الحساب المختار.'
-        return 'تم الحفظ في MongoDB؛ يُطبّق التغيير من الدورة القادمة دون تعديل الصفقة المفتوحة.'
+            if selection_requested and not self.running:
+                try:
+                    return await self.synchronize_selection()
+                except Exception as exc:
+                    diagnostic=await self.record_error(exc,send_notification=False)
+                    return 'تم حفظ الإعداد، لكن لم تكتمل المزامنة.\n'+diagnostic.public_text()
+            if selection_requested:
+                return 'تم الحفظ؛ ستتم مزامنة MetaTrading قبل الدخول التالي، وبعد حسم الصفقة المفتوحة إن وجدت.'
+        return 'تم الحفظ في MongoDB؛ يُطبّق التغيير من الدورة القادمة دون تعديل الصفقة المفتوحة.' 
 
     async def _pause(self, delay):
         if delay <= 0:
@@ -278,7 +295,9 @@ class TradingWorker:
                     await self.repo.acknowledge_pending()
                     print('[WORKER] stale pending marker auto-archived; continuing', flush=True)
                 mode = self.repo.doc['account_mode']
+                self.selection_changed.clear()
                 t = deepcopy(self.repo.doc['trading'])
+                payout_policy = deepcopy(self.repo.doc['payout'])
                 recovery_policy = deepcopy(self.repo.doc['recovery'])
                 effective_base, recovery_context = sizing(self.repo.doc, mode)
                 self.apply_snapshot(mode, t)
@@ -314,14 +333,28 @@ class TradingWorker:
                     if getattr(self.po, 'saw_other_account_balance', False):
                         raise SafeIssue('PO_ACCOUNT_MISMATCH')
                     raise SafeIssue('PO_BALANCE_MISSING')
-                self.stage = 'waiting_signal'
-                self.listener.drain_pending()
-                self.stage = 'signal_button'
-                if not await self.listener.press_new_signal():
-                    await self._pause(2)
+                if not await self.guard_payout(t,payout_policy,mode):
                     continue
-                self.stage = 'signal_wait'
-                direction = await self.listener.wait_for_signal(config.SIGNAL_TIMEOUT_SECONDS)
+                self.stage = 'meta_signal'
+                signal_task=asyncio.create_task(self.listener.next_direction(t['asset'],t['duration_seconds'],self.stop_event))
+                changed_task=asyncio.create_task(self.selection_changed.wait())
+                payout_task=asyncio.create_task(self.wait_payout_change(t,payout_policy))
+                try:
+                    done,_=await asyncio.wait((signal_task,changed_task,payout_task),return_when=asyncio.FIRST_COMPLETED)
+                    if changed_task in done or payout_task in done:
+                        continue
+                    try:
+                        direction=await signal_task
+                    except NavigationError as exc:
+                        print(f'[META] request invalidated: {exc}',flush=True)
+                        self.stage='meta_retry'
+                        await self._pause(2)
+                        continue
+                finally:
+                    for task in (signal_task,changed_task,payout_task):
+                        if not task.done(): task.cancel()
+                        with suppress(asyncio.CancelledError,Exception):
+                            await task
                 if not direction or self.stop_event.is_set():
                     continue
                 self.stage = 'entry_delay'
@@ -330,6 +363,7 @@ class TradingWorker:
                     break
                 # Changes received while waiting invalidate this old signal.
                 if (t != self.repo.doc['trading'] or mode != self.repo.doc['account_mode']
+                        or payout_policy != self.repo.doc['payout']
                         or recovery_policy != self.repo.doc['recovery']
                         or recovery_context['epoch'] != selected_state(self.repo.doc, mode)['epoch']):
                     continue
@@ -337,6 +371,10 @@ class TradingWorker:
                     continue  # fresh connection needs a fresh signal, not a replay
                 if await self.enforce_limits():
                     break
+                if not await self.guard_payout(t,payout_policy,mode,wait=False):
+                    continue
+                if not self.listener.verifies(t['asset'],t['duration_seconds'],max_age=max(10,t['entry_delay_seconds']+2)):
+                    continue
                 order = dict(id=uuid4().hex, mode=mode, amount=mm.current_amount(),
                              asset=t['asset'], direction=direction,
                              created_at=time.time(), step=mm.step, sizing_signature=list(sig),
@@ -354,6 +392,7 @@ class TradingWorker:
                 before = None
                 result = None
                 try:
+                    self.po.entry_check=lambda: self.entry_eligible(t,payout_policy,mode)
                     ok = await asyncio.wait_for(self.po.place_trade(direction, order['amount']),
                                                  config.CONNECT_TIMEOUT_SECONDS)
                     before = self.po._balance_before
@@ -361,6 +400,11 @@ class TradingWorker:
                         self.stage = 'order_result'
                         result = await self.po.wait_for_result(
                             t['duration_seconds'] + t['result_timeout_extra'])
+                except PayoutBlocked:
+                    await self.repo.resolve(order,None,None,None,mm.step,dispatched=False)
+                    self.in_flight=False
+                    self.stage='payout_recheck'
+                    continue
                 except Exception as send_err:
                     print(f'[WORKER] send/result error ({type(send_err).__name__}) - continuing', flush=True)
                     ok = False
@@ -410,7 +454,7 @@ class TradingWorker:
         finally:
             self.running = False
             self.in_flight = False
-            if self.stage not in ('error', 'error_review', 'limit_reached'):
+            if self.stage not in ('error', 'error_review', 'limit_reached', 'payout_stopped'):
                 self.stage = 'stopped'
 
     async def close(self):

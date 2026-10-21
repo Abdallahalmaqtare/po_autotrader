@@ -14,6 +14,7 @@ from pocket_option import PocketOptionWS, USER_AGENT
 from cloud_settings import auth_frame
 from diagnostics import SafeIssue
 from account_details import positive_uid
+from payout_guard import PayoutBook, PayoutBlocked, allowed, symbol
 
 
 class EventDecoder:
@@ -23,6 +24,12 @@ class EventDecoder:
     def feed(self, frame):
         if isinstance(frame, bytes):
             if not self.pending:
+                try:
+                    raw=json.loads(frame.decode('utf-8'))
+                    if isinstance(raw,list) and raw and isinstance(raw[0],list) and len(raw[0])>5 and symbol(raw[0][1]):
+                        return [['updateAssets',raw]]
+                except (ValueError,UnicodeDecodeError,TypeError):
+                    pass
                 return []
             try:
                 value = json.loads(frame.decode('utf-8'))
@@ -46,6 +53,13 @@ class EventDecoder:
                 return [restore(event)]
             except (IndexError, KeyError, TypeError):
                 return []
+        if isinstance(frame,str) and frame.startswith('[['):
+            try:
+                raw=json.loads(frame)
+                if raw and isinstance(raw[0],list) and len(raw[0])>5 and symbol(raw[0][1]):
+                    return [['updateAssets',raw]]
+            except (ValueError,TypeError):
+                pass
         if frame.startswith('45') and '-' in frame:
             try:
                 n, data = frame[2:].split('-', 1)
@@ -71,6 +85,8 @@ class CloudPocket(PocketOptionWS):
         self.url = credentials['ws_url']
         self.mode = mode
         self.credentials = credentials.copy()
+        self.payout_book = PayoutBook(mode)
+        self.entry_check = None
         self.decoder = EventDecoder()
         self.balance_at = 0.0
         self.saw_other_account_balance = False
@@ -86,6 +102,7 @@ class CloudPocket(PocketOptionWS):
         PO_ACCOUNT_MISMATCH instead of a generic missing balance."""
         if not isinstance(event, list) or len(event) < 2:
             return
+        self.payout_book.feed(event)
         name, payload = event[:2]
         if not isinstance(payload, dict):
             return
@@ -127,6 +144,7 @@ class CloudPocket(PocketOptionWS):
 
     async def connect(self):
         await self.close()
+        self.payout_book.clear()
         self.decoder = EventDecoder()
         self.balance = None
         self.saw_other_account_balance = False
@@ -183,9 +201,15 @@ class CloudPocket(PocketOptionWS):
             self.connected = False
 
     async def ensure_connected(self):
+        if self.entry_check is not None and not self.entry_check():
+            raise PayoutBlocked('pre_send_guard_rejected')
         if not self.connected:
             # Never replay an old signal through an automatic reconnect.
             raise RuntimeError('disconnected_before_send')
+
+    async def refresh_payouts(self):
+        # Known handshake, not a guessed getAssets event. Called BETWEEN orders.
+        await self.connect()
 
     async def select_asset(self, asset, duration):
         await self.ws.send('42' + json.dumps(['changeSymbol', {'asset': asset, 'period': duration}]))
