@@ -23,7 +23,9 @@ from trade_settlement import DealTracker, number
 from uuid import uuid4
 
 
-class CloudPocket(PocketOptionWS):
+from connection_lifecycle import ConnectionLifecycle,OrderNotSent
+
+class CloudPocket(ConnectionLifecycle,PocketOptionWS):
     strict_results = True
     def __init__(self, credentials, mode):
         super().__init__(credentials['ssid'])
@@ -44,6 +46,11 @@ class CloudPocket(PocketOptionWS):
         self.on_evidence = None
         self._evidence_tasks = set()
         self.server_name = None
+        self.closed_event=asyncio.Event()
+        self.connection_state="DISCONNECTED"
+        self.last_connection_code=""
+        self.last_connection_stage="not_started"
+        self._heartbeat_task=None
 
     def _build_auth_frame(self):
         return auth_frame(self.credentials['ssid'], self.mode, self.credentials.get('uid', 0))
@@ -93,7 +100,9 @@ class CloudPocket(PocketOptionWS):
             if uid is None and name in ('successauth', 'profile', 'updateProfile'):
                 user = payload.get('user')
                 if isinstance(user, dict):
-                    uid = positive_uid(user.get('id')) or positive_uid(user.get('uid'))
+                    uid=positive_uid(user.get('uid'))
+                    candidate=positive_uid(user.get('id'))
+                    if not uid and candidate==self.expected_uid:uid=candidate
             if uid:
                 expected_uid=str(self.credentials.get('uid') or '')
                 from account_details import credential_uid
@@ -101,7 +110,7 @@ class CloudPocket(PocketOptionWS):
                 if expected_uid and str(uid)!=expected_uid:
                     self.saw_other_account_balance=True
                     self.connected=False
-                    raise SafeIssue('PO_ACCOUNT_MISMATCH')
+                    raise SafeIssue('PO_UID_MISMATCH')
                 self.server_uid = uid
             user=payload.get('user') if isinstance(payload.get('user'),dict) else payload
             from account_registry import safe_name
@@ -116,64 +125,6 @@ class CloudPocket(PocketOptionWS):
             self.balance = value
             self.balance_at = time.monotonic()
             print(f'[PO] Balance received ({self.mode}): {value}', flush=True)
-
-    async def connect(self):
-        await self.close()
-        self.payout_book.clear()
-        self.decoder = EventDecoder()
-        self.balance = None
-        self.saw_other_account_balance = False
-        self.server_uid = None
-        headers = {'User-Agent': USER_AGENT, 'Origin': 'https://pocketoption.com'}
-        kwargs = dict(ping_interval=None, max_size=2**22, close_timeout=3,
-                      open_timeout=10, ssl=ssl.create_default_context())
-        key = 'additional_headers' if 'additional_headers' in inspect.signature(websockets.connect).parameters else 'extra_headers'
-        kwargs[key] = headers
-        try:
-            async with asyncio.timeout(config.CONNECT_TIMEOUT_SECONDS):
-                self.ws = await websockets.connect(self.url, **kwargs)
-                greeting = await self.ws.recv()
-                if not isinstance(greeting, str) or not greeting.startswith('0'):
-                    raise RuntimeError('protocol_open_failed')
-                await self.ws.send('40')
-                while True:
-                    msg = await self.ws.recv()
-                    if msg == '2':
-                        await self.ws.send('3')
-                    elif isinstance(msg, str) and msg.startswith('40'):
-                        break
-                await self.ws.send(self._build_auth_frame())
-                authenticated = False
-                while not authenticated:
-                    msg = await self.ws.recv()
-                    if msg == '2':
-                        await self.ws.send('3')
-                        continue
-                    for event in self.decoder.feed(msg):
-                        if not isinstance(event, list) or not event:
-                            continue
-                        if event[0] in ('failauth', 'errorauth', 'authError'):
-                            raise SafeIssue('PO_AUTH_REJECTED')
-                        self.process(event)
-                        authenticated = event[0] == 'successauth' or self.balance is not None
-                self.connected = True
-                self._recv_task = asyncio.create_task(self._receiver_loop())
-        except BaseException:
-            await self.close()
-            raise
-
-    async def _receiver_loop(self):
-        try:
-            async for frame in self.ws:
-                if frame == '2':
-                    await self.ws.send('3')
-                else:
-                    for event in self.decoder.feed(frame):
-                        self.process(event)
-        except Exception:
-            pass  # do not log server payloads/session strings
-        finally:
-            self.connected = False
 
     def prepare_order(self,order):
         self.last_settlement=None
@@ -218,11 +169,11 @@ class CloudPocket(PocketOptionWS):
         return None
 
     async def ensure_connected(self):
+        state=getattr(self.ws,'state',None)
+        if not self.connected or self.ws is None or getattr(state,'name','') in ('CLOSING','CLOSED'):
+            raise OrderNotSent('disconnected_before_send')
         if self.entry_check is not None and not self.entry_check():
             raise PayoutBlocked('pre_send_guard_rejected')
-        if not self.connected:
-            # Never replay an old signal through an automatic reconnect.
-            raise RuntimeError('disconnected_before_send')
 
     async def refresh_payouts(self):
         # Known handshake, not a guessed getAssets event. Called BETWEEN orders.
@@ -231,14 +182,3 @@ class CloudPocket(PocketOptionWS):
     async def select_asset(self, asset, duration):
         await self.ws.send('42' + json.dumps(['changeSymbol', {'asset': asset, 'period': duration}]))
 
-    async def close(self):
-        self.connected = False
-        task, self._recv_task = self._recv_task, None
-        if task and task is not asyncio.current_task():
-            task.cancel()
-            with suppress(asyncio.CancelledError, Exception):
-                await task
-        if self.ws:
-            with suppress(Exception):
-                await self.ws.close()
-        self.ws = None

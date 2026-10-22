@@ -17,7 +17,9 @@ from recovery import recovery_text, short_summary
 from compact_stats import compact_report
 from work_cycle import cycle_text
 from account_registry import account_label,registry_text,credential_key,safe_name
-from account_details import positive_uid
+from account_details import positive_uid,credential_uid,credentials_match
+from account_registry import DuplicateAccount,account_key
+from connection_lifecycle import connection_url
 
 
 class AdminOnly(BaseMiddleware):
@@ -38,6 +40,8 @@ class Input(StatesGroup):
     credential = State()
     account_uid = State()
     account_name = State()
+    account_url = State()
+    account_rename = State()
     url = State()
     number = State()
     limit = State()
@@ -143,11 +147,42 @@ def accounts_kb(doc=None):
 def account_list_kb(doc,page=0):
     records=sorted(doc.get('accounts',{}).items(),key=lambda item:(item[1]['mode'],int(item[1]['uid'])))
     pages=max(1,math.ceil(len(records)/8));page=max(0,min(page,pages-1))
-    rows=[[(account_label(record,key==doc.get('active_account_id')),f'account:pick:{key}')]
+    rows=[[(account_label(record,key==doc.get('active_account_id')),f'account:card:{key}')]
           for key,record in records[page*8:page*8+8]]
     if pages>1:
         rows.append([('◀️',f'account:list:{max(0,page-1)}'),(f'{page+1}/{pages}','noop'),('▶️',f'account:list:{min(pages-1,page+1)}')])
     return kb(rows+[[('➕ إضافة حساب','account:add')],[('⬅️ إدارة الحسابات','accounts')]])
+
+
+def account_card_text(doc,key,po=None):
+    record=doc.get('accounts',{}).get(key)
+    if not record:return 'الحساب غير موجود؛ حدّث القائمة.'
+    active=key==doc.get('active_account_id')
+    connected=bool(active and po and po.connected and getattr(po,'mode',None)==record['mode'] and credentials_match(po.credentials,record['credentials'],record['mode']))
+    stats=doc['account_stats'][record['mode']] if active else record['stats']
+    text=('👤 بطاقة الحساب\n'+account_label(record,active)+
+          f"\nالحالة: {'نشط' if active else 'محفوظ — غير نشط'}"+
+          f"\nWebSocket: {'متصل' if connected else 'غير متصل' if active else 'لم يُختبر — اختر الحساب أولاً'}"+
+          f"\nصافي السجل: ${stats['net_pnl']:+.2f}")
+    if active and po:
+        code=getattr(po,'last_connection_code','')
+        stage=getattr(po,'last_connection_stage','')
+        if code:text+=f'\nسبب الاتصال: {code} | المرحلة: {stage}'
+    return text
+
+
+def account_card_kb(doc,key):
+    if key not in doc.get('accounts',{}):return account_list_kb(doc)
+    active=key==doc.get('active_account_id')
+    rows=[]
+    if not active:rows.append([('✅ اختيار هذا الحساب','account:pick:'+key)])
+    else:rows.append([('🔌 اختبار / إعادة اتصال','account:connect:'+key)])
+    rows += [[('🔑 تجديد الجلسة SSID','account:renew:'+key)],
+             [('🔗 تعديل رابط WebSocket','account:editurl:'+key)],
+             [('✏️ تعديل الاسم','account:rename:'+key)],
+             [('🗑 حذف الحساب','account:delete:'+key)],
+             [('📋 قائمة الحسابات','account:list:0'),('🏠 الرئيسية','home')]]
+    return kb(rows)
 
 
 def assets_kb(page):
@@ -239,7 +274,10 @@ def build_dispatcher(repo, worker, bot):
                 if worker.diagnostic:
                     text += '\n\n' + worker.diagnostic.public_text()
                 rows = [[('🔍 تحقق من الصفقة المعلّقة', 'settle_review')], [('🗃 مراجعة وأرشفة يدوية', 'review')], [('⬅️ الرئيسية', 'home')]] if worker.pending else None
-                return await panel(bot, cb, text, kb(rows) if rows else home())
+                if not rows:
+                    key=repo.doc.get('active_account_id')
+                    rows=([ [('🔌 اختبار / إعادة اتصال','account:connect:'+key)] ] if key else [])+[[('👤 إدارة الحسابات','accounts')],[('🏠 الرئيسية','home')]]
+                return await panel(bot, cb, text, kb(rows))
             if action == 'payout_refresh':
                 text=await worker.refresh_payout_ui()
                 return await panel(bot,cb,text,payout_kb(repo.doc))
@@ -351,7 +389,41 @@ def build_dispatcher(repo, worker, bot):
             if action == 'accounts':
                 return await panel(bot, cb, registry_text(repo.doc,worker.po), accounts_kb(repo.doc))
             if action == 'account:active':
-                return await panel(bot,cb,account_text(repo.doc,worker.po),accounts_kb(repo.doc))
+                key=repo.doc.get('active_account_id')
+                return await panel(bot,cb,account_card_text(repo.doc,key,worker.po),account_card_kb(repo.doc,key))
+            if action.startswith('account:card:'):
+                key=action.split(':',2)[2]
+                return await panel(bot,cb,account_card_text(repo.doc,key,worker.po),account_card_kb(repo.doc,key))
+            if action.startswith('account:connect:'):
+                key=action.split(':',2)[2]
+                text=await worker.reconnect_account(key)
+                return await panel(bot,cb,text+'\n\n'+account_card_text(repo.doc,key,worker.po),account_card_kb(repo.doc,key))
+            if action.startswith(('account:renew:','account:editurl:','account:rename:')):
+                kind=action.split(':')[1];key=action.split(':',2)[2]
+                record=repo.doc.get('accounts',{}).get(key)
+                if not record:raise ValueError('الحساب غير موجود')
+                if worker.pending or worker.in_flight:raise ValueError('انتظر حسم الصفقة المعلّقة أولاً')
+                if key==repo.doc.get('active_account_id') and worker.running:raise ValueError('أوقف التداول أولاً قبل تعديل الحساب النشط')
+                await state.update_data(editing_id=key,mode=record['mode'])
+                if kind=='renew':
+                    await state.set_state(Input.credential)
+                    prompt='🔑 أرسل إطار auth جديداً أو SSID خاماً لنفس UID. سيبقى السجل والاسم محفوظين.'
+                elif kind=='editurl':
+                    await state.set_state(Input.account_url)
+                    prompt='🔗 أرسل رابط wss الجديد. هذا يعدّل الرابط فقط، وليس الجلسة أو UID.'
+                else:
+                    await state.set_state(Input.account_rename)
+                    prompt='✏️ أرسل الاسم الجديد أو /clear لحذف الاسم فقط.'
+                return await panel(bot,cb,prompt+'\n/cancel للإلغاء',kb([[('إلغاء','account:card:'+key)]]))
+            if action.startswith('account:delete:'):
+                key=action.split(':',2)[2];record=repo.doc.get('accounts',{}).get(key)
+                if not record:raise ValueError('الحساب غير موجود')
+                return await panel(bot,cb,'🗑 تأكيد حذف الحساب\n'+account_label(record)+'\nستُحذف الجلسة والرابط من القائمة، وتبقى النتائج مؤرشفة دون أسرار. إن كان نشطاً سيوقف التداول ولن يُختار بديل تلقائياً.',kb([
+                    [('🗑 تأكيد الحذف','account:deleteyes:'+key)],[('إلغاء','account:card:'+key)]]))
+            if action.startswith('account:deleteyes:'):
+                key=action.split(':',2)[2]
+                text=await worker.delete_account(key)
+                return await panel(bot,cb,text,account_list_kb(repo.doc))
             if action.startswith('account:list:'):
                 page=int(action.rsplit(':',1)[1])
                 return await panel(bot,cb,'📋 الحسابات المحفوظة\nUID · النوع · الاسم\n✅ الحساب النشط',account_list_kb(repo.doc,page))
@@ -454,6 +526,21 @@ def build_dispatcher(repo, worker, bot):
             # Never echo raw exceptions containing Mongo URI/session/WS payloads.
             await ui.notice(f'تعذّرت العملية ({type(e).__name__}). لم يُؤكّد نجاح التغيير؛ راجع الحالة.', home(), view='error')
 
+    async def accept_frame(frame,state):
+        data=await state.get_data();mode=data['mode']
+        uid=credential_uid({'ssid':frame},mode);key=account_key(uid,mode)
+        editing=data.get('editing_id')
+        if editing and key!=editing:raise ValueError('UID الجلسة مختلف. أضفه كحساب جديد؛ لن نستبدل سجل هذا الحساب.')
+        if not editing and key in repo.doc.get('accounts',{}):raise DuplicateAccount(key)
+        await state.update_data(frame=frame,raw_ssid='')
+        await state.set_state(Input.url)
+        prompt='أرسل رابط wss جديداً أو /skip للاحتفاظ بالرابط الحالي.' if editing else 'أرسل رابط wss أو /skip للرابط الافتراضي.'
+        await ui.show(prompt+'\n/cancel للإلغاء',view='accounts')
+
+    async def duplicate_notice(exc,state):
+        await state.clear()
+        await ui.show('ℹ️ هذا الحساب موجود من قبل. لم تُستبدل الجلسة أو الرابط.\nافتح تجديد الجلسة أو تعديل الرابط من بطاقته.',account_card_kb(repo.doc,exc.key),view='accounts')
+
     @dp.message(Input.credential)
     async def credential(msg: Message,state: FSMContext):
         data=await state.get_data();raw=(msg.text or '').strip()
@@ -462,13 +549,12 @@ def build_dispatcher(repo, worker, bot):
             mode=data['mode']
             if not raw.startswith('42'):
                 if not raw or len(raw)>20000:raise ValueError('SSID غير صالح')
-                await state.update_data(raw_ssid=raw)
-                await state.set_state(Input.account_uid)
-                return await ui.show('أرسل UID الرقمي الفعلي لهذا الحساب، وليس SSID آخر. /cancel للإلغاء',view='accounts')
-            frame=auth_frame(raw,mode)
-            await state.update_data(frame=frame)
-            await state.set_state(Input.url)
-            await ui.show('تم استلام الجلسة دون عرضها. أرسل رابط wss أو /skip للرابط الافتراضي. /cancel للإلغاء',view='accounts')
+                editing=data.get('editing_id');record=repo.doc.get('accounts',{}).get(editing)
+                if record:return await accept_frame(auth_frame(raw,mode,int(record['uid'])),state)
+                await state.update_data(raw_ssid=raw);await state.set_state(Input.account_uid)
+                return await ui.show('أرسل UID الرقمي الفعلي لهذا الحساب. /cancel للإلغاء',view='accounts')
+            await accept_frame(auth_frame(raw,mode),state)
+        except DuplicateAccount as exc:await duplicate_notice(exc,state)
         except (ValueError,KeyError) as exc:
             await ui.show(str(exc) if isinstance(exc,ValueError) else 'أعد فتح إدارة الحسابات.',accounts_kb(repo.doc),view='accounts')
 
@@ -476,11 +562,8 @@ def build_dispatcher(repo, worker, bot):
     async def account_uid(msg: Message,state: FSMContext):
         data=await state.get_data();uid=positive_uid(msg.text)
         if not uid:return await ui.show('UID يجب أن يكون رقماً موجباً فعلياً للحساب.',view='accounts')
-        try:
-            frame=auth_frame(data['raw_ssid'],data['mode'],int(uid))
-            await state.update_data(frame=frame,raw_ssid='')
-            await state.set_state(Input.url)
-            await ui.show('أرسل رابط wss أو /skip للرابط الافتراضي. /cancel للإلغاء',view='accounts')
+        try:await accept_frame(auth_frame(data['raw_ssid'],data['mode'],int(uid)),state)
+        except DuplicateAccount as exc:await duplicate_notice(exc,state)
         except (ValueError,KeyError):await ui.show('أعد إضافة بيانات الجلسة من إدارة الحسابات.',accounts_kb(repo.doc),view='accounts')
 
     @dp.message(Input.url)
@@ -488,26 +571,56 @@ def build_dispatcher(repo, worker, bot):
         data=await state.get_data()
         with suppress(Exception):await msg.delete()
         try:
-            mode=data['mode']
-            value=(config.REAL_URL if mode=='REAL' else config.DEMO_URL) if msg.text=='/skip' else valid_url(msg.text)
-            await state.update_data(ws_url=value)
-            await state.set_state(Input.account_name)
-            await ui.show('أرسل اسماً مختصراً للحساب أو /skip لعرض UID والنوع فقط. /cancel للإلغاء',view='accounts')
-        except (ValueError,KeyError):await ui.show('رابط غير صالح؛ أرسل رابط wss الخاص بالمنصة أو /skip.',view='accounts')
+            mode=data['mode'];editing=data.get('editing_id')
+            current=repo.doc['accounts'][editing]['credentials']['ws_url'] if editing else (config.REAL_URL if mode=='REAL' else config.DEMO_URL)
+            value=connection_url(current if msg.text=='/skip' else msg.text)
+            await state.update_data(ws_url=value);await state.set_state(Input.account_name)
+            await ui.show('أرسل اسماً مختصراً أو /skip للاحتفاظ بالاسم الحالي.' if editing else 'أرسل اسماً مختصراً للحساب أو /skip لعرض UID والنوع فقط.',view='accounts')
+        except (ValueError,KeyError):await ui.show('رابط غير صالح؛ أرسل رابط wss للمنصة أو /skip.',view='accounts')
 
     @dp.message(Input.account_name)
     async def account_name(msg: Message,state: FSMContext):
         data=await state.get_data()
         try:
-            name='' if msg.text=='/skip' else safe_name(msg.text)
+            key=data.get('editing_id');name=(None if key else '') if msg.text=='/skip' else safe_name(msg.text)
             credentials=dict(ssid=data['frame'],ws_url=data['ws_url'])
+            if key:
+                text=await worker.edit_account(key,credentials,name)
+                await state.clear()
+                return await ui.show(text+'\nاختبر الاتصال من البطاقة؛ لن يبدأ التداول تلقائياً.',account_card_kb(repo.doc,key),view='accounts')
             key=await worker.add_account(credentials,data['mode'],name)
             await state.clear()
             await ui.show('✅ تم حفظ الحساب: '+account_label(repo.doc['accounts'][key])+'\nلم يبدأ التداول ولم يُبدّل الحساب النشط تلقائياً.',account_list_kb(repo.doc),view='accounts')
+        except DuplicateAccount as exc:await duplicate_notice(exc,state)
         except ValueError as exc:await ui.show(str(exc),accounts_kb(repo.doc),view='accounts')
         except Exception:
             await state.clear()
             await ui.show('تعذّر تأكيد حفظ الحساب؛ أعد فتح القائمة للتحقق.',accounts_kb(repo.doc),view='accounts')
+
+    @dp.message(Input.account_url)
+    async def account_url(msg: Message,state: FSMContext):
+        data=await state.get_data();key=data.get('editing_id')
+        with suppress(Exception):await msg.delete()
+        try:
+            credentials=repo.doc['accounts'][key]['credentials'].copy()
+            credentials['ws_url']=connection_url(msg.text)
+            text=await worker.edit_account(key,credentials)
+            await state.clear()
+            await ui.show(text+('\n🔌 اضغط اختبار / إعادة اتصال.' if key==repo.doc.get('active_account_id') else '\nاختر الحساب عند الاستعداد لاختبار اتصاله.'),account_card_kb(repo.doc,key),view='accounts')
+        except (ValueError,KeyError) as exc:
+            await ui.show(str(exc) if isinstance(exc,ValueError) else 'الحساب غير موجود؛ حدّث القائمة.',account_card_kb(repo.doc,key),view='accounts')
+        except Exception:await ui.show('لم يُؤكد حفظ الرابط؛ تحقق من اتصال قاعدة البيانات.',account_card_kb(repo.doc,key),view='accounts')
+
+    @dp.message(Input.account_rename)
+    async def account_rename(msg: Message,state: FSMContext):
+        key=(await state.get_data()).get('editing_id')
+        try:
+            name='' if msg.text=='/clear' else safe_name(msg.text)
+            text=await worker.edit_account(key,name=name)
+            await state.clear()
+            await ui.show(text,account_card_kb(repo.doc,key),view='accounts')
+        except ValueError as exc:await ui.show(str(exc),account_card_kb(repo.doc,key),view='accounts')
+        except Exception:await ui.show('لم يُؤكد حفظ الاسم؛ تحقق من قاعدة البيانات.',account_card_kb(repo.doc,key),view='accounts')
 
     @dp.message(Input.limit)
     async def limit_input(msg: Message, state: FSMContext):

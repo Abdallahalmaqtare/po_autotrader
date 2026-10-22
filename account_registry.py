@@ -6,6 +6,12 @@ from copy import deepcopy
 import re
 
 
+class DuplicateAccount(ValueError):
+    def __init__(self,key):
+        self.key=key
+        super().__init__("هذا الحساب موجود من قبل؛ افتح بطاقته للتعديل بدلاً من إضافته مجدداً")
+
+
 def account_key(uid,mode):return f'{mode}_{uid}'
 
 

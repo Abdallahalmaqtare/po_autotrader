@@ -11,6 +11,8 @@ import time
 from telethon import TelegramClient
 import config
 from cloud_settings import auth_frame
+from account_details import credentials_match
+from connection_lifecycle import OrderNotSent
 from cloud_transport import CloudPocket
 from martingale import MoneyManager
 from synchronized_signals import SynchronizedSignalListener as SignalListener
@@ -165,6 +167,9 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
         key=account_key(record['uid'],mode)
         async with self.operations:
             if self.in_flight or self.pending:raise ValueError('انتظر حسم الصفقة المعلّقة قبل تعديل الحسابات')
+            if key in self.repo.doc.get('accounts',{}):
+                from account_registry import DuplicateAccount
+                raise DuplicateAccount(key)
             if key==self.repo.doc.get('active_account_id') and self.running:
                 raise ValueError('أوقف التداول أولاً لتحديث جلسة الحساب النشط')
             result=await self.repo.save_account(credentials,mode,name)
@@ -172,11 +177,66 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 await self.po.close()
             return result
 
+    async def edit_account(self,key,credentials=None,name=None):
+        async with self.operations:
+            if self.in_flight or self.pending:raise ValueError('انتظر حسم الصفقة المعلّقة قبل التعديل')
+            active=key==self.repo.doc.get('active_account_id')
+            if active and self.running:raise ValueError('أوقف التداول أولاً قبل تعديل الحساب النشط')
+            if credentials is not None:
+                from connection_lifecycle import connection_url
+                credentials=deepcopy(credentials);credentials['ws_url']=connection_url(credentials['ws_url'])
+            await self.repo.edit_account(key,credentials,name)
+            if active and credentials is not None:
+                if self.po:await self.po.close()
+                self.po=None;self.stage='credentials_updated';self.last_error='';self.diagnostic=None
+            return 'تم حفظ التعديل دون تغيير UID أو الإحصائيات.'
+
+    async def delete_account(self,key):
+        async with self.operations:
+            if self.in_flight or self.pending:raise ValueError('انتظر حسم الصفقة المفتوحة قبل الحذف')
+            active=key==self.repo.doc.get('active_account_id')
+            if active:
+                await self._stop(immediate=True)
+                if self.po:await self.po.close()
+                self.po=None
+            await self.repo.delete_account(key)
+            if active:self.stage='no_account_selected';self.last_error='';self.diagnostic=None
+            return 'تم حذف الحساب وبيانات اتصاله من القائمة. بقي سجل نتائجه مؤرشفاً دون أسرار؛ لم يُختر حساب آخر تلقائياً.'
+
+    async def reconnect_account(self,key=None):
+        async with self.operations:
+            if key is not None and key!=self.repo.doc.get('active_account_id'):
+                return 'اختر هذا الحساب أولاً؛ اختبار الاتصال لا يغير الحساب النشط تلقائياً.'
+            if self.in_flight or self.pending:return 'توجد صفقة معلّقة؛ استخدم التحقق من نتيجتها دون إعادة إرسالها.'
+            if self.running:return 'التداول يعمل؛ أوقفه أولاً لإجراء اختبار اتصال مستقل.'
+            try:
+                await self.connect_account()
+                deadline=time.monotonic()+config.CONNECT_TIMEOUT_SECONDS
+                while self.po.connected and self.po.balance is None and time.monotonic()<deadline:
+                    await asyncio.sleep(.1)
+                if not self.po.connected:raise SafeIssue(getattr(self.po,'last_connection_code','') or 'PO_DISCONNECTED')
+                if self.po.balance is None:raise SafeIssue('PO_BALANCE_MISSING')
+                self.diagnostic=None;self.last_error='';self.stage='account_ready'
+                return '✅ WebSocket متصل، والمصادقة تمت ووصل الرصيد. التداول متوقف حتى تضغط بدء.'
+            except Exception as exc:
+                diagnostic=await self.record_error(exc,send_notification=False)
+                self.stage='connection_error'
+                return diagnostic.public_text()
+
     async def select_account(self,key):
         async with self.operations:
             if self.in_flight or self.pending:raise ValueError('انتظر حسم الصفقة المفتوحة قبل تبديل الحساب')
+            if key not in self.repo.doc.get('accounts',{}):raise ValueError('الحساب غير موجود؛ حدّث القائمة')
             if key==self.repo.doc.get('active_account_id'):
-                return 'هذا هو الحساب النشط بالفعل؛ لم يتغير التداول أو السجل.'
+                matches=self.po and self.po.connected and getattr(self.po,'mode',None)==self.repo.doc['account_mode'] and credentials_match(self.po.credentials,self.repo.doc['accounts'][key]['credentials'],self.repo.doc['account_mode'])
+                if matches:return 'هذا هو الحساب النشط والمتصل بالفعل؛ لم يتغير التداول أو السجل.'
+                if self.running:raise ValueError('أوقف التداول أولاً لإعادة اتصال الحساب النشط')
+                try:
+                    await self.connect_account();self.stage='account_ready'
+                    return 'تمت إعادة اتصال الحساب النشط. التداول متوقف حتى تضغط بدء.'
+                except Exception as exc:
+                    diagnostic=await self.record_error(exc,send_notification=False)
+                    return diagnostic.public_text()
             await self._stop(immediate=True)
             if self.po:await self.po.close()
             await self.repo.select_account(key)
@@ -414,11 +474,19 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                     self.stage = 'connecting'
                     try:
                         await self.connect_account()
+                    except SafeIssue as exc:
+                        if exc.code not in ('PO_CONNECT_TIMEOUT','PO_DISCONNECTED','PO_HEARTBEAT_TIMEOUT','PO_CONNECT_FAILED'):raise
+                        await self.record_error(exc,send_notification=False)
+                        self.stage='reconnecting';await self._pause(5);continue
                     except (TimeoutError, ConnectionError, OSError):
                         self.stage = 'reconnecting'
                         await self._pause(5)
                         continue
-                await self.po.select_asset(t['asset'], t['duration_seconds'])
+                try:
+                    await self.po.select_asset(t['asset'], t['duration_seconds'])
+                except Exception as exc:
+                    if self.po.connected:raise
+                    self.stage='reconnecting';await self._pause(1);continue
                 # A baseline balance is necessary. Wait up to connection timeout,
                 # but never send an order while no account balance is known.
                 deadline = time.monotonic() + config.CONNECT_TIMEOUT_SECONDS
@@ -437,8 +505,15 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 changed_task=asyncio.create_task(self.selection_changed.wait())
                 payout_task=asyncio.create_task(self.wait_payout_change(t,payout_policy))
                 cycle_task=asyncio.create_task(self.wait_cycle_boundary(mm.step))
+                closed=getattr(self.po,'closed_event',None)
+                connection_task=asyncio.create_task(closed.wait() if isinstance(closed,asyncio.Event) else asyncio.Event().wait())
                 try:
-                    done,_=await asyncio.wait((signal_task,changed_task,payout_task,cycle_task),return_when=asyncio.FIRST_COMPLETED)
+                    done,_=await asyncio.wait((signal_task,changed_task,payout_task,cycle_task,connection_task),return_when=asyncio.FIRST_COMPLETED)
+                    if connection_task in done:
+                        disarm=getattr(self.listener,"disarm",None)
+                        if callable(disarm):disarm()
+                        self.stage="reconnecting"
+                        continue
                     if changed_task in done or payout_task in done or cycle_task in done:
                         continue
                     try:
@@ -449,7 +524,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                         await self._pause(2)
                         continue
                 finally:
-                    for task in (signal_task,changed_task,payout_task,cycle_task):
+                    for task in (signal_task,changed_task,payout_task,cycle_task,connection_task):
                         if not task.done(): task.cancel()
                         with suppress(asyncio.CancelledError,Exception):
                             await task
@@ -505,6 +580,12 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                         self.stage = 'order_result'
                         result = await self.po.wait_for_result(
                             t['duration_seconds'] + t['result_timeout_extra'])
+                except OrderNotSent:
+                    await self.repo.resolve(order,None,None,None,mm.step,dispatched=False)
+                    self.in_flight=False;self.stage='reconnecting'
+                    disarm=getattr(self.listener,'disarm',None)
+                    if callable(disarm):disarm()
+                    continue
                 except PayoutBlocked:
                     await self.repo.resolve(order,None,None,None,mm.step,dispatched=False)
                     self.in_flight=False

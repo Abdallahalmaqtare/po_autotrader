@@ -8,7 +8,7 @@ from pymongo.write_concern import WriteConcern
 from cloud_settings import defaults, validate_document, patched, empty_stats, MODES
 from recovery import after_result, selected_state, reset_state, recovery_defaults
 from work_cycle import cycle_state
-from account_registry import migrate, bank_active, make_record, account_key, select_document
+from account_registry import migrate, bank_active, make_record, account_key, select_document, credential_key, DuplicateAccount
 from trade_settlement import number
 from decimal import Decimal
 
@@ -239,23 +239,60 @@ class Repository:
     async def save_account(self,credentials,mode,name=''):
         record=make_record(credentials,mode,name);key=account_key(record['uid'],mode)
         async with self.lock:
+            if key in self.doc.get('accounts',{}):raise DuplicateAccount(key)
             if self.doc['runtime'].get('pending'):raise ValueError('انتظر حسم الصفقة المعلّقة أولاً')
             new=deepcopy(self.doc);bank_active(new)
-            existing=new['accounts'].get(key)
-            if existing:
-                existing['credentials']=record['credentials']
-                if record['name']:existing['name']=record['name']
-            else:
-                if len(new['accounts'])>=50:raise ValueError('الحد الأقصى 50 حساباً')
-                new['accounts'][key]=record
-            writes={'accounts':new['accounts']}
-            if key==new.get('active_account_id'):
-                field='real_account' if mode=='REAL' else 'demo_account'
-                new[field]=deepcopy(new['accounts'][key]['credentials']);writes[field]=new[field]
-            r=await self.collection.update_one(self.fence(),{'$set':writes})
+            if len(new['accounts'])>=50:raise ValueError('الحد الأقصى 50 حساباً')
+            archived=new.get('account_archives',{}).get(key)
+            if archived:
+                for field in ('stats','recovery','martingale_step','sizing_signature','cycle','sequence_loss_amount'):
+                    if field in archived:record[field]=deepcopy(archived[field])
+                if not record['name']:record['name']=archived.get('name','')
+            new['accounts'][key]=record
+            r=await self.collection.update_one(self.fence(),{'$set':{'accounts':new['accounts']}})
             if r.matched_count!=1:raise RuntimeError('lease_lost')
             self.doc=new
         return key
+
+    async def edit_account(self,key,credentials=None,name=None):
+        async with self.lock:
+            if self.doc['runtime'].get('pending'):raise ValueError('انتظر حسم الصفقة المعلّقة أولاً')
+            if key not in self.doc.get('accounts',{}):raise ValueError('الحساب غير موجود؛ حدّث القائمة')
+            new=deepcopy(self.doc);bank_active(new);record=new['accounts'][key]
+            checked=make_record(credentials or record['credentials'],record['mode'],record['name'] if name is None else name)
+            if account_key(checked['uid'],checked['mode'])!=key:
+                raise ValueError('UID الجلسة الجديدة مختلف؛ أضفها كحساب جديد ولا تستبدل سجل الحساب')
+            record['credentials']=checked['credentials'];record['name']=checked['name']
+            writes={'accounts':new['accounts']}
+            # Update the legacy selected-mode mirror as well as the registry.
+            if key==new.get('active_accounts',{}).get(record['mode']):
+                field=credential_key(record['mode']);new[field]=deepcopy(record['credentials']);writes[field]=new[field]
+            r=await self.collection.update_one(self.fence(),{'$set':writes})
+            if r.matched_count!=1:raise RuntimeError('lease_lost')
+            self.doc=new
+
+    async def delete_account(self,key):
+        from config import DEMO_URL,REAL_URL
+        from recovery import state_defaults
+        async with self.lock:
+            if self.doc['runtime'].get('pending'):raise ValueError('لا يمكن الحذف قبل حسم الصفقة المعلّقة')
+            if key not in self.doc.get('accounts',{}):raise ValueError('الحساب محذوف بالفعل أو غير موجود')
+            new=deepcopy(self.doc);bank_active(new);record=new['accounts'].pop(key)
+            archive={k:deepcopy(v) for k,v in record.items() if k!='credentials'}
+            archive['deleted_at']=utcnow().isoformat();new.setdefault('account_archives',{})[key]=archive
+            mode=record['mode']
+            if new['active_accounts'].get(mode)==key:
+                new['active_accounts'][mode]=None
+                new[credential_key(mode)]=dict(ssid='',uid=0,ws_url=REAL_URL if mode=='REAL' else DEMO_URL)
+                new['account_stats'][mode]=empty_stats();new['runtime']['recovery'][mode]=state_defaults()
+            if new.get('active_account_id')==key:
+                new['active_account_id']=None
+                new['runtime'].update(martingale_step=0,sizing_signature=None,sequence_loss_amount=0.0,cycle=cycle_state())
+            writes={k:new[k] for k in ('accounts','account_archives','active_accounts','active_account_id',
+                                      'demo_account','real_account','account_stats','runtime')}
+            r=await self.collection.update_one(self.fence(),{'$set':writes})
+            if r.matched_count!=1:raise RuntimeError('lease_lost')
+            self.doc=new
 
     async def select_account(self,key):
         async with self.lock:
@@ -292,10 +329,10 @@ class Repository:
             new['session_stats']=empty_stats();new['account_stats']={m:empty_stats() for m in MODES}
             new['runtime'].update(martingale_step=0,sequence_loss_amount=0.0,sizing_signature=None,
                 recovery={m:reset_state(selected_state(new,m)) for m in MODES})
-            for record in new.get('accounts',{}).values():
+            for record in list(new.get('accounts',{}).values())+list(new.get('account_archives',{}).values()):
                 record.update(stats=empty_stats(),recovery=reset_state(record['recovery']),
                     martingale_step=0,sizing_signature=None,sequence_loss_amount=0.0)
-            r=await self.collection.update_one(self.fence(),{'$set':{k:new[k] for k in ('session_stats','account_stats','runtime','accounts')}})
+            r=await self.collection.update_one(self.fence(),{'$set':{k:new[k] for k in ('session_stats','account_stats','runtime','accounts','account_archives') if k in new}})
             if r.matched_count!=1:raise RuntimeError('lease_lost')
             self.doc=new
 
