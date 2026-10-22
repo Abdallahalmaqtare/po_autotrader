@@ -1,9 +1,11 @@
 {
-  "build": "v20-payout-cycle-fix",
-  "offline_tests": 190,
+  "build": "v21-confirmed-ledger-multi-accounts",
+  "offline_tests": 235,
   "passed": true,
   "live_trading_tested": false,
-  "unchanged_v19_core_sha256": {
+  "strict_production_settlement": true,
+  "display_only_statistics": true,
+  "retained_core_sha256": {
     "pocket_option.py": "2b8678e81bb48d23ba82fc575d550653bb364f86bcf952564e8ab16e7eb63073",
     "martingale.py": "3bec3b0fc32ec081c6761cefc7e36aec8defe02b0f252826af44652c1e2e44eb",
     "telegram_signal.py": "3d478052a70c153def998ab38eb7497050794bce6dfa1b51eb6319df0742d9f2",

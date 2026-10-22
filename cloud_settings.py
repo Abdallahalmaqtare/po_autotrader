@@ -90,6 +90,8 @@ def defaults():
         'recovery': recovery_defaults(),
         'payout': payout_defaults(),
         'schedule': cycle_defaults(),
+        'accounts': {}, 'active_accounts': {'PRACTICE':None,'REAL':None},
+        'active_account_id': None, 'trade_ledger': [],
         'session_stats': empty_stats(),
         'account_stats': {m: empty_stats() for m in MODES},
         'runtime': {'pending': None, 'martingale_step': 0, 'cycle': cycle_state(),
