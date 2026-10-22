@@ -4,10 +4,6 @@ from pathlib import Path
 import traceback
 
 MESSAGES = {
-    'PO_UID_MISMATCH': ('UID الجلسة لا يطابق الحساب المحدد', 'جدّد جلسة نفس UID من بطاقة الحساب. لن نعطل تحقق الهوية أو ننقل الحساب تلقائياً.'),
-    'PO_PROTOCOL_FAILED': ('لم يكتمل بروتوكول اتصال المنصة', 'جدّد رابط WebSocket من بطاقة الحساب وتحقق من EIO=3 أو EIO=4 وtransport=websocket.'),
-    'PO_CONNECT_TIMEOUT': ('انتهت مهلة اتصال المنصة', 'تحقق من الرابط وصلاحية الجلسة وتوفر المضيف من شبكة الاستضافة ثم استخدم اختبار / إعادة اتصال.'),
-    'PO_HEARTBEAT_TIMEOUT': ('انقطعت نبضات اتصال المنصة', 'سيعاد الاتصال بين الصفقات بإشارة جديدة. إن كانت هناك صفقة معلقة فلا تعاد أو تُحسب خسارة بالتخمين.'),
     'META_SYNC_FAILED': ('لم تكتمل مزامنة الزوج والمدة مع مصدر الإشارات', 'لن يُرسل أمر قبل تطابق الزوج والمدة. راجع محادثة المصدر وزر Trade/OTC/Back وتوفر المدة.'),
     'TG_SESSION_INVALID': ('جلسة Telethon غير صالحة', 'أنشئ TELEGRAM_STRING_SESSION بواسطة session_tool.py؛ لا تستخدم Bot Token أو SSID أو اسم ملف الجلسة.'),
     'TG_SESSION_UNAUTHORIZED': ('جلسة تيليجرام غير مخوّلة أو أُلغيت', 'أعد تسجيل الدخول محلياً عبر session_tool.py --login ثم حدّث TELEGRAM_STRING_SESSION وأعد النشر.'),

@@ -29,10 +29,8 @@ def payload_json(frame):
 def event_payload(value):
     if isinstance(value,list) and value and isinstance(value[0],str): return [value]
     if isinstance(value,dict):
-        if 'deals' in value and isinstance(value['deals'],list):return [['closedDeals',value]]
-        if 'requestId' in value and 'asset' in value and 'amount' in value:return [['orderData',value]]
         name=value.get('event')
-        if name in ('updateAssets','assets','updatePayout','updatePayouts','successopenOrder','successcloseOrder','closedDeals','successauth','failauth','errorauth','authError','updateBalance','profile','updateProfile'):
+        if name in ('updateAssets','assets','updatePayout','updatePayouts'):
             return [[name,value.get('data',value.get('assets'))]]
     if isinstance(value,list) and any(isinstance(row,list) and len(row)>5 and symbol(row[1]) for row in value):
         return [['updateAssets',value]]

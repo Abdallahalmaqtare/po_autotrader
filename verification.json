@@ -1,22 +1,12 @@
 {
-  "build": "v22-connection-account-manager",
-  "offline_tests": 277,
+  "build": "v20-payout-cycle-fix",
+  "offline_tests": 190,
   "passed": true,
-  "live_account_tested": false,
   "live_trading_tested": false,
-  "simulated_protocols": [
-    "Engine.IO 3",
-    "Engine.IO 4"
-  ],
-  "retained_v21_sha256": {
+  "unchanged_v19_core_sha256": {
     "pocket_option.py": "2b8678e81bb48d23ba82fc575d550653bb364f86bcf952564e8ab16e7eb63073",
     "martingale.py": "3bec3b0fc32ec081c6761cefc7e36aec8defe02b0f252826af44652c1e2e44eb",
     "telegram_signal.py": "3d478052a70c153def998ab38eb7497050794bce6dfa1b51eb6319df0742d9f2",
-    "logger.py": "cee9bcf05229308aecdf0628c9cf4d52d088ab650e70bcd7d06a5fb91ae4a8e9",
-    "trade_settlement.py": "e8f8f9083421ba460e03ea610e3e1203222f215af3d49ae375ab4128c9dc7b84",
-    "recovery.py": "fbfda79bda27a9f218f3a99fa3f8d940f1f78fba4d2af9c62786f3bb912c093a",
-    "risk_limits.py": "7bd6856593b6b741b6a5c773f147125a10257878c6cae83835d30b5263cec4b9",
-    "work_cycle.py": "3191086c00fe84bf6b8d8e11a9a4ea9e00bc6de6fa9c347dd44cc759bee603d0",
-    "payout_guard.py": "3f2858b72b5307b1779f6fc7fb7132a71542683575790a57d3487577789bed06"
+    "logger.py": "cee9bcf05229308aecdf0628c9cf4d52d088ab650e70bcd7d06a5fb91ae4a8e9"
   }
 }

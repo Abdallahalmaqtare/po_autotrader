@@ -23,8 +23,6 @@ class PayoutWorkflow:
 
     async def refresh_payout_ui(self):
         async with self.operations:
-            if self.pending and self.pending.get('strict_result'):
-                return self.payout_status()+'\nيوجد أمر غير محسوم؛ لا نقطع اتصال انتظار نتيجته لتحديث العائد.'
             if self.running:
                 self.payout_refresh_requested=True
                 return self.payout_status()+'\nطُلب تجديد الجدول بين الصفقات؛ لا نقطع صفقة مفتوحة.'
