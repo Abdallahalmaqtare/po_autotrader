@@ -13,6 +13,7 @@ from account_registry import migrate, bank_active, make_record, account_key, sel
 from trade_settlement import number
 from decimal import Decimal
 from manual_pause import pause_defaults
+from balance_settlement import validate_balance_receipt
 
 
 def utcnow():
@@ -164,7 +165,7 @@ class Repository:
     async def resolve(self, order, result, before, after, next_step, dispatched=True,
                       seq_lost=0, seq_lost_amount=0.0):
         """One atomic pending-ID commit for stats, recovery, ledger and sizing.
-        Strict transport supplies a matched deal receipt; balances are diagnostic.
+        Production receipts identify either exact broker evidence or guarded balance settlement.
         Legacy mock/import paths retain explicit delta accounting, never UI writes.
         """
         async with self.lock:
@@ -179,11 +180,13 @@ class Repository:
             if dispatched and result in ('win','loss','draw'):
                 if order.get('strict_result'):
                     if not isinstance(receipt,dict) or any((
-                        receipt.get('order_id')!=order['id'],receipt.get('request_id')!=order['request_id'],
+                        receipt.get('order_id')!=order['id'],str(receipt.get('request_id'))!=str(order['request_id']),
                         receipt.get('result')!=result,receipt.get('mode')!=mode,
                         receipt.get('account_id')!=order.get('account_id'),
-                        receipt.get('source')!='broker_closed_deal')):
+                        receipt.get('source') not in ('broker_closed_deal','balance_refund','balance_credit','balance_loss'))):
                         raise ValueError('نتيجة الصفقة غير مرتبطة بالأمر المحفوظ')
+                    if receipt['source']!='broker_closed_deal' and not validate_balance_receipt(receipt,order):
+                        raise ValueError('دليل الرصيد غير كاف لحسم الصفقة')
                     delta=number(receipt.get('net_pnl'))
                     if delta is None or delta < -number(amount):raise ValueError('قيمة نتيجة غير صالحة')
                     label='win' if delta>0 else 'loss' if delta<0 else 'draw'
@@ -216,6 +219,7 @@ class Repository:
             loss_before=float(new['runtime'].get('sequence_loss_amount',0))
             loss_next=(loss_before+abs(float(delta))) if dispatched and result=='loss' and delta is not None else loss_before
             if result=='win' or seq_lost or (result is None and dispatched and next_step==0):loss_next=0.0
+            if dispatched:new['runtime']['unconfirmed_streak']=int(new['runtime'].get('unconfirmed_streak',0))+1 if result is None else 0
             new['runtime'].update(pending=None,martingale_step=effective_step,
                 sizing_signature=order.get('sizing_signature'),sequence_loss_amount=round(loss_next,6))
             new['runtime'].setdefault('recovery',{})[mode]=current
@@ -225,7 +229,9 @@ class Repository:
                     broker_id=receipt.get('broker_id') if receipt else None,
                     account_id=order.get('account_id'),mode=mode,asset=order.get('asset'),amount=amount,
                     result=result or 'unconfirmed',net_pnl=float(delta) if delta is not None else None,
-                    source='broker_closed_deal' if receipt else 'legacy_or_explicit_archive',
+                    source=receipt['source'] if receipt else 'unconfirmed_archive',
+                    archive_reason=order.get('archive_reason'),duration_seconds=order.get('duration_seconds'),
+                    step=order.get('step'),seq_lost=seq_lost,seq_lost_amount=seq_lost_amount,evidence=deepcopy(receipt.get('evidence')) if receipt else None,
                     settled_at=utcnow()))
             new['trade_ledger']=ledger[-500:]
             bank_active(new)
@@ -234,6 +240,89 @@ class Repository:
             r=await self.collection.update_one(q,{'$set':writes})
             if r.matched_count!=1:raise RuntimeError('result_already_saved_or_lease_lost')
             self.doc=new
+
+    async def archive_pending(self,reason,next_step=None):
+        pending=deepcopy(self.doc['runtime'].get('pending'))
+        if not pending:return False
+        pending['strict_result']=False;pending['archive_reason']=reason
+        await self.resolve(pending,None,None,None,
+                           pending.get('step',0) if next_step is None else next_step,dispatched=True)
+        return True
+
+    async def set_entry_guard(self,until):
+        async with self.lock:
+            value=max(float(self.doc['runtime'].get('entry_not_before',0)),float(until))
+            r=await self.collection.update_one(self.fence(),{'$set':{'runtime.entry_not_before':value}})
+            if r.matched_count!=1:raise RuntimeError('lease_lost')
+            self.doc['runtime']['entry_not_before']=value
+
+    async def reset_run(self,entry_not_before=0.0):
+        """Full Stop: retain config/financial history, clear only the active run."""
+        async with self.lock:
+            if self.doc['runtime'].get('pending'):raise ValueError('أرشفة الأمر المعلّق أولاً')
+            new=deepcopy(self.doc);mode=new['account_mode']
+            new['runtime'].update(martingale_step=0,sizing_signature=None,sequence_loss_amount=0.0,
+                                  manual_pause=pause_defaults(),cycle=cycle_state(),entry_not_before=float(entry_not_before),unconfirmed_streak=0,correction_required=False)
+            new['runtime']['recovery'][mode]=reset_state(selected_state(new,mode))
+            bank_active(new)
+            r=await self.collection.update_one(self.fence(),{'$set':{'runtime':new['runtime'],'accounts':new['accounts']}})
+            if r.matched_count!=1:raise RuntimeError('lease_lost')
+            self.doc=new
+
+    async def reconcile_archived(self,order,receipt):
+        """Late exact deal changes finance ONCE, never the live run's sizing.
+        If it contradicts an inferred balance result, caller must stop new entries.
+        """
+        if not receipt or receipt.get('source')!='broker_closed_deal':return None
+        if (receipt.get('order_id')!=order['id'] or str(receipt.get('request_id'))!=str(order['request_id'])
+                or receipt.get('mode')!=order['mode'] or receipt.get('account_id')!=order.get('account_id')):
+            raise ValueError('late_receipt_identity_mismatch')
+        delta=number(receipt.get('net_pnl'));amount=number(order['amount'])
+        if delta is None or delta < -amount:return None
+        label='win' if delta>0 else 'loss' if delta<0 else 'draw'
+        if label!=receipt.get('result'):return None
+        async with self.lock:
+            index=next((i for i,item in enumerate(self.doc.get('trade_ledger',[])) if item['id']==order['id']),None)
+            if index is None:return None
+            old=self.doc['trade_ledger'][index]
+            if old.get('source')=='broker_closed_deal':return None
+            if old.get('source') not in ('unconfirmed_archive','balance_refund','balance_credit','balance_loss','legacy_or_explicit_archive'):return None
+            for item in self.doc['trade_ledger']:
+                if receipt.get('broker_id') and item['id']!=order['id'] and item.get('broker_id')==receipt['broker_id'] and item.get('account_id')==order.get('account_id'):return None
+            new=deepcopy(self.doc);mode=order['mode'];key=order.get('account_id')
+            old_result=old.get('result');old_delta=number(old.get('net_pnl'))
+            change=dict(net_pnl=float(delta-(old_delta or 0)))
+            keys={'win':'won_trades','loss':'lost_trades','draw':'draws'}
+            change[keys[label]]=1
+            if old_result in keys:change[keys[old_result]]=change.get(keys[old_result],0)-1
+            else:change['unconfirmed']=-1;change['financial_trades']=1
+            new_seq=int(label=='loss' and int(order.get('step',0))>=max(1,int(order.get('martingale_steps',4)))-1)
+            old_seq=int(old.get('seq_lost',0))
+            new_seq_amount=float(order.get('sequence_loss_before',0))+abs(float(delta)) if new_seq else 0.0
+            if new_seq!=old_seq or new_seq_amount!=float(old.get('seq_lost_amount',0)):
+                change['sequence_losses']=new_seq-old_seq
+                change['lost_amount']=new_seq_amount-float(old.get('seq_lost_amount',0))
+            old_return=max(Decimal(0),amount+old_delta) if old_delta is not None else Decimal(0)
+            change['total_returned']=float(max(Decimal(0),amount+delta)-old_return)
+            if key==new.get('active_account_id') or (key is None and new.get('active_account_id') is None and mode==new['account_mode']):
+                targets=[new['session_stats'],new['account_stats'][mode]]
+            else:
+                record=new.get('accounts',{}).get(key)
+                targets=[new['session_stats']]+([record['stats']] if record else [])
+            for stats in targets:
+                for field,value in change.items():stats[field]=float((number(stats.get(field,0))+number(value)).quantize(Decimal('0.000001')))
+            corrected=old_result in keys and (old_result!=label or old_delta!=delta)
+            new['trade_ledger'][index].update(result=label,net_pnl=float(delta),broker_id=receipt.get('broker_id'),
+                source='broker_closed_deal',late_reconciled=True,corrected=corrected,seq_lost=new_seq,seq_lost_amount=new_seq_amount,settled_at=utcnow())
+            bank_active(new)
+            writes={k:new[k] for k in ('session_stats','account_stats','accounts','trade_ledger')}
+            if corrected:
+                new['runtime']['correction_required']=True
+                writes['runtime.correction_required']=True
+            r=await self.collection.update_one(self.fence(),{'$set':writes})
+            if r.matched_count!=1:raise RuntimeError('lease_lost')
+            self.doc=new
+            return dict(result=label,net_pnl=float(delta),corrected=corrected)
 
     async def record_broker_id(self,order_id,broker_id):
         async with self.lock:

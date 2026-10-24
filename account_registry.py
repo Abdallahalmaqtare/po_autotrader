@@ -71,6 +71,7 @@ def bank_active(doc):
         record['martingale_step']=doc['runtime'].get('martingale_step',0)
         record['sizing_signature']=deepcopy(doc['runtime'].get('sizing_signature'))
         record['cycle']=deepcopy(doc['runtime']['cycle'])
+        record['entry_not_before']=doc['runtime'].get('entry_not_before',0.0)
         record['manual_pause']=deepcopy(doc['runtime'].get('manual_pause',{}))
         record['sequence_loss_amount']=doc['runtime'].get('sequence_loss_amount',0.0)
 
@@ -87,6 +88,7 @@ def select_document(doc,key):
     new['runtime']['sizing_signature']=deepcopy(record['sizing_signature'])
     new['runtime']['cycle']=deepcopy(record['cycle'])
     from manual_pause import pause_defaults
+    new['runtime']['entry_not_before']=record.get('entry_not_before',0.0)
     new['runtime']['manual_pause']=deepcopy(record.get('manual_pause') or pause_defaults())
     return new
 

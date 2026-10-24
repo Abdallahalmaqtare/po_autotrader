@@ -34,7 +34,10 @@ def nodes(payload):
     if isinstance(payload,dict):
         yield payload
         for k in ('deals','orders','data','result','order','deal','closedDeals'):
-            if isinstance(payload.get(k),(dict,list)):yield from nodes(payload[k])
+            if isinstance(payload.get(k),dict):
+                context={x:payload[x] for x in ('requestId','request_id','uid','isDemo') if x in payload}
+                yield from nodes({**context,**payload[k]})
+            elif isinstance(payload.get(k),list):yield from nodes(payload[k])
     elif isinstance(payload,list):
         for value in payload:yield from nodes(value)
 
@@ -48,11 +51,11 @@ def outcome_finances(deal,stake):
     if amount is None or amount<=0:return None
     status=str(deal.get('result',deal.get('status',''))).lower()
     aliases={'won':'win','win':'win','loss':'loss','lose':'loss','lost':'loss',
-             'draw':'draw','tie':'draw','refund':'draw','refunded':'draw'}
+             'draw':'draw','tie':'draw','refund':'draw','refunded':'draw','equal':'draw','returned':'draw'}
     label=aliases.get(status)
-    if deal.get('isDraw') is True:label='draw'
+    if deal.get('isDraw') in (True,1,'1','true'):label='draw'
     net_values=[number(deal[k]) for k in ('netProfit','net_profit','profit') if k in deal]
-    gross_values=[number(deal[k]) for k in ('returnedAmount','returnAmount','totalReturned') if k in deal]
+    gross_values=[number(deal[k]) for k in ('returnedAmount','returnAmount','totalReturned','returned_amount') if k in deal]
     if any(v is None for v in net_values+gross_values):return None
     if net_values and any(abs(v-net_values[0])>EPS for v in net_values):return None
     if gross_values and any(abs(v-gross_values[0])>EPS for v in gross_values):return None
@@ -96,7 +99,7 @@ class DealTracker:
 
     def identified(self,deal):
         request=deal.get('requestId',deal.get('request_id'))
-        broker=deal.get('id',deal.get('dealId',deal.get('orderId')))
+        broker=deal.get('id',deal.get('dealId',deal.get('orderId',deal.get('order_id',deal.get('deal_id')))))
         if request is not None and str(request)!=self.request:return False
         if request is not None:return True
         return bool(self.broker_id and broker is not None and str(broker)==self.broker_id)
@@ -118,7 +121,7 @@ class DealTracker:
                 if final and deal.get('id') is not None and ('profit' in deal or 'netProfit' in deal or 'returnedAmount' in deal):
                     self.deferred=(self.deferred+[deepcopy(deal)])[-50:]
                 continue
-            broker=deal.get('id',deal.get('dealId',deal.get('orderId')))
+            broker=deal.get('id',deal.get('dealId',deal.get('orderId',deal.get('order_id',deal.get('deal_id')))))
             if broker is not None:
                 if self.broker_id and str(broker)!=self.broker_id:continue
                 self.broker_id=str(broker)

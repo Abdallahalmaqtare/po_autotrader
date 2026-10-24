@@ -55,15 +55,13 @@ def kb(rows):
 
 
 def home(worker=None):
+    primary=('⏸ إيقاف مؤقت','pause')
     if worker and (worker.pause_requested or worker.repo.doc['runtime'].get('manual_pause',{}).get('requested')):
-        primary=('⏳ انتظار نتيجة الصفقة','pause') if worker.pending or worker.in_flight else ('▶️ استمرار','resume')
-    elif worker and worker.running:primary=('⏸ إيقاف مؤقت','pause')
-    else:primary=('▶️ بدء / استمرار','resume')
-    return kb([[primary],
-               [('📊 الإحصائيات','stats'),('🔄 الحالة','status')],
-               [('⚙️ الإعدادات','settings'),('👤 إدارة الحسابات','accounts')],
-               [('🛟 التعزيز','recovery'),('🛡 الحدود','limits')],
-               [('🧰 الأدوات والصيانة','tools')]])
+        primary=('⏳ انتظار النتيجة','pause') if worker.pending or worker.in_flight else ('▶️ استمرار','resume')
+    elif not worker or not worker.running:primary=('▶️ تشغيل جديد','start')
+    return kb([[primary,('⏹ إيقاف التشغيل','stop')],
+               [('📊 الإحصائيات','stats'),('⚙️ الإعدادات','settings')],
+               [('👤 إدارة الحسابات','accounts'),('🔄 الحالة','status')]])
 
 
 def stats_kb():
@@ -82,7 +80,7 @@ def settings_kb():
                [('🛟 التعزيز', 'recovery'), ('🛡 حدود الربح والخسارة', 'limits')],
                [('📉 حماية عائد الزوج', 'payout'), ('⏱ التشغيل والراحة', 'cycle')],
                [('🤖 بوت الإشارات','signal_source')],
-               [('⚡ التوقيتات المتقدمة', 'timing')],
+               [('🧰 متقدم وفحص','advanced')],
                [('👤 إدارة الحسابات', 'accounts'), ('🏠 الرئيسية', 'home')]])
 
 
@@ -241,8 +239,15 @@ def build_dispatcher(repo, worker, bot):
                 if worker.running or worker.pending:raise ValueError('أكمل الإيقاف المؤقت وانتظر نتيجة الصفقة أولاً')
                 await state.set_state(Input.signal_source)
                 return await panel(bot,cb,'أرسل يوزر بوت الإشارات مثل @ExampleSignalBot أو رابط t.me. /cancel للإلغاء',None)
+            if action == 'advanced':
+                return await panel(bot,cb,'🧰 أدوات متقدمة',kb([
+                    [('🔌 فحص WebSocket','ws_diagnose'),('🧪 فحص شامل','diagnose')],
+                    [('⏳ التوقيتات','timing'),('🗑 تصفير الإحصائيات','reset_stats')],
+                    [('⬅️ الإعدادات','settings')]]))
             if action == 'start':
-                text = await worker.start()
+                if worker.pending or worker.running:
+                    text='التداول يعمل أو يستكمل صفقة؛ استخدم إيقاف التشغيل أولاً لبدء سلسلة جديدة.'
+                else:text = await worker.start()
                 return await panel(bot, cb, text, home(worker))
             if action == 'stop':
                 # Mark stop before awaiting anything else.

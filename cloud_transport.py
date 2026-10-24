@@ -1,4 +1,4 @@
-"""Cloud lifecycle adapter. Production orders use exact broker-deal settlement.
+"""Cloud lifecycle adapter. Exact broker results first, bounded guarded balance compatibility second.
 Engine.IO heartbeat + Socket.IO 42 and single/multiple binary JSON attachments.
 """
 import asyncio
@@ -21,11 +21,14 @@ from payout_guard import PayoutBook, PayoutBlocked, allowed, symbol
 from wire_decoder import EventDecoder
 from trade_settlement import DealTracker, number
 from uuid import uuid4
+from collections import deque
+from balance_settlement import BalanceEvidence
 from ws_connection import control_text,connect_options,safe_host,failure_code,is_retryable
 
 
 class CloudPocket(PocketOptionWS):
     strict_results = True
+    result_clock=staticmethod(time.monotonic)
     def __init__(self, credentials, mode):
         super().__init__(credentials['ssid'])
         self.url = credentials['ws_url']
@@ -49,6 +52,10 @@ class CloudPocket(PocketOptionWS):
         self.connection_code=''
         self.disconnect_event=asyncio.Event()
         self.connect_lock=asyncio.Lock()
+        self.balance_evidence=None
+        self.retired=deque(maxlen=20)
+        self.on_retired=None
+        self.order_expiry_wall=0.0
 
     def _build_auth_frame(self):
         return auth_frame(self.credentials['ssid'], self.mode, self.credentials.get('uid', 0))
@@ -60,6 +67,14 @@ class CloudPocket(PocketOptionWS):
         PO_ACCOUNT_MISMATCH instead of a generic missing balance."""
         if not isinstance(event, list) or len(event) < 2:
             return
+        for retired in list(self.retired):
+            was=retired.settlement
+            retired.feed(event)
+            if retired.settlement and retired.settlement!=was and self.on_retired:
+                task=asyncio.create_task(self.on_retired(retired.order,retired.settlement))
+                self._evidence_tasks.add(task)
+                task.add_done_callback(self._evidence_tasks.discard)
+                task.add_done_callback(lambda t:t.exception() if not t.cancelled() else None)
         if self.tracker:
             old_id=self.tracker.broker_id
             self.tracker.feed(event)
@@ -120,6 +135,7 @@ class CloudPocket(PocketOptionWS):
         except (TypeError, ValueError):
             return
         if math.isfinite(value) and value >= 0:
+            if self.balance_evidence and name in ('updateBalance','balance'):self.balance_evidence.feed(value)
             self.balance = value
             self.balance_at = time.monotonic()
             print(f'[PO] Balance received ({self.mode}): {value}', flush=True)
@@ -202,12 +218,19 @@ class CloudPocket(PocketOptionWS):
             if not self.connection_code:self.connection_code='PO_WS_CLOSED'
 
     def prepare_order(self,order):
+        if self.tracker and self.tracker.order['id']!=order['id']:self.retire_order()
+        self.balance_evidence=None
         self.last_settlement=None
         self.tracker=DealTracker(order,self.server_uid or self.expected_uid)
 
+    def retire_order(self):
+        if self.tracker and not any(t.order['id']==self.tracker.order['id'] for t in self.retired):self.retired.append(self.tracker)
+        self.tracker=None;self.balance_evidence=None;self.last_settlement=None
+
     async def flush_evidence(self):
         if self._evidence_tasks:
-            await asyncio.gather(*list(self._evidence_tasks))
+            # Cancelling a trade wait must not cancel an independent late ledger commit.
+            await asyncio.shield(asyncio.gather(*list(self._evidence_tasks)))
 
     async def place_trade(self,direction,amount=None):
         # Never retry an uncertain send. Tracker exists BEFORE yielding to send().
@@ -217,10 +240,12 @@ class CloudPocket(PocketOptionWS):
             raise RuntimeError('order_snapshot_changed')
         async with self._lock:
             await self.ensure_connected()
-            self._balance_before=self.balance  # diagnostics only; NOT PnL
+            self._balance_before=self.balance
+            self.balance_evidence=BalanceEvidence(order,self.balance,self.balance_at,now=self.result_clock)
             frame=['openOrder',dict(asset=order['asset'],amount=order['amount'],
                 action='call' if direction=='UP' else 'put',isDemo=1 if self.mode=='PRACTICE' else 0,
                 optionType=100,time=order['duration_seconds'],requestId=order['request_id'])]
+            self.order_expiry_wall=time.time()+float(order['duration_seconds'])+2
             began=time.perf_counter()
             await self.ws.send('42'+json.dumps(frame,separators=(',',':')))
             print(f"[PO] ORDER SENT id={order['id']} request={order['request_id']} amount={order['amount']} latency_ms={(time.perf_counter()-began)*1000:.1f}",flush=True)
@@ -228,20 +253,35 @@ class CloudPocket(PocketOptionWS):
 
     async def wait_for_result(self,timeout=8):
         if self.tracker is None:return None
+        # A bounded final-settlement window. Never turn the first debit into LOSS.
         budget=max(0,float(timeout))+max(0,float(config.BALANCE_SETTLE_SECONDS))+max(0,float(config.LOSS_RECHECK_SECONDS))
-        try:await asyncio.wait_for(self.tracker.ready.wait(),budget)
-        except asyncio.TimeoutError:
-            print('[RESULT] exact closed deal not received; unresolved, no doubling',flush=True)
-            await self.flush_evidence()
-            return None
-        await self.flush_evidence()
-        if self.tracker.conflict:return None
-        self.last_settlement=self.tracker.settlement
-        if self.last_settlement:
-            item=self.last_settlement
-            print(f"[RESULT] confirmed broker deal={item['broker_id']} result={item['result']} net={item['net_pnl']:+.6f}",flush=True)
-            return item['result']
-        return None
+        evidence=self.balance_evidence
+        quiet=max(.5,float(config.BALANCE_SETTLE_SECONDS))
+        end=time.monotonic()+budget
+        if evidence:end=max(end,evidence.expires+quiet)
+        while True:
+            if self.tracker.conflict:return None
+            if self.tracker.ready.is_set():
+                await self.flush_evidence()
+                self.last_settlement=self.tracker.settlement
+                if self.last_settlement:
+                    item=self.last_settlement
+                    print(f"[RESULT] exact deal={item['broker_id']} result={item['result']} net={item['net_pnl']:+.6f}",flush=True)
+                    return item['result']
+            # Restore v20 compatibility only with observed debit + mature refund/
+            # winning credit. Receipt source stays explicit in the financial log.
+            receipt=evidence.evaluate(self.connected,quiet,loss_ready=time.monotonic()>=end,open_ack=bool(self.tracker.broker_id)) if evidence else None
+            if receipt:
+                self.last_settlement=receipt
+                print(f"[RESULT] compatible source={receipt['source']} result={receipt['result']} net={receipt['net_pnl']:+.6f}",flush=True)
+                return receipt['result']
+            remaining=end-time.monotonic()
+            if remaining<=0:
+                await self.flush_evidence()
+                print('[RESULT] bounded wait ended; no inferred loss, controls remain available',flush=True)
+                return None
+            try:await asyncio.wait_for(self.tracker.ready.wait(),min(.2,remaining))
+            except asyncio.TimeoutError:pass
 
     async def ensure_connected(self):
         if self.entry_check is not None and not self.entry_check():

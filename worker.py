@@ -7,6 +7,7 @@ from runtime_support import timestamp_print as print
 from contextlib import suppress
 from copy import deepcopy
 from uuid import uuid4
+import secrets
 import time
 from telethon import TelegramClient
 import config
@@ -85,9 +86,49 @@ class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
         self.running = False
 
     async def stop(self):
+        """Full Stop is NOT Pause: bounded settling, archive unknowns, fresh ladder.
+        Does not close a market order already accepted by the broker.
+        """
+        self.request_stop()
         async with self.operations:
-            await self._stop()
-        return 'تم منع الدخول الجديد وإيقاف الحلقة. الصفقة المفتوحة إن وجدت لا يمكن إلغاؤها من المنصة.'
+            old=deepcopy(self.pending)
+            hold_until=0.0
+            if old:
+                hold_until=float(old.get('created_at',0))+float(old.get('duration_seconds',0))+2
+                hold_until=max(hold_until,float(getattr(self.po,'order_expiry_wall',0) or 0))
+            await self._stop(immediate=True)
+            watch=getattr(self,'settlement_watch_task',None)
+            if watch and not watch.done():
+                watch.cancel()
+                with suppress(asyncio.CancelledError,Exception):await watch
+            if self.pending:
+                receipt=getattr(self.po,'last_settlement',None) if self.po else None
+                tracker=getattr(self.po,'tracker',None) if self.po else None
+                receipt=receipt or (tracker.settlement if tracker and not tracker.conflict else None)
+                if receipt:
+                    await self._save_pending_receipt(deepcopy(self.pending),receipt)
+                else:await self.repo.archive_pending('manual_stop',next_step=0)
+            if self.po and callable(getattr(self.po,'retire_order',None)):
+                self.po.on_retired=self._retired_result
+                self.po.retire_order()
+            await self.repo.reset_run(entry_not_before=hold_until)
+            self.pause_requested=False;self.running=False;self.in_flight=False;self.stage='stopped'
+            disarm=getattr(self.listener,'disarm',None)
+            if callable(disarm):disarm();self.listener.prepared=None
+        return '⏹ تم إيقاف التشغيل. التشغيل الجديد يبدأ من الأساس وبنفس الإعدادات؛ الإحصائيات محفوظة. أي نتيجة مجهولة مؤرشفة دون خسارة أو تدبيل.'
+
+    async def _retired_result(self,order,receipt):
+        async with self.operations:
+            saved=await self.repo.reconcile_archived(order,receipt)
+            if not saved:return
+            if saved['corrected']:
+                self.request_stop()
+                self.stage='result_corrected'
+            await self.enforce_limits()
+            if self.notify:
+                text=(f"تمت تسوية نتيجة متأخرة: {saved['result']} | الصافي ${saved['net_pnl']:+.2f}. "
+                      +('أُوقف الدخول لمراجعة تصحيح قراءة الرصيد.' if saved['corrected'] else 'لم تُكرر الصفقة ولم يتغير مستوى السلسلة الحالية.'))
+                with suppress(Exception):await asyncio.wait_for(self.notify(text),5)
 
     async def record_error(self, exc, send_notification=True):
         diagnostic = diagnose_exception(exc, self.stage)
@@ -307,6 +348,7 @@ class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
         self.po = self.po_factory(credentials, mode)
         if getattr(self.po,'strict_results',False) is True:
             self.po.on_evidence=self.repo.record_broker_id
+            self.po.on_retired=self._retired_result
             if pending_order:self.po.prepare_order(pending_order)
         await self.po.connect()
 
@@ -334,6 +376,8 @@ class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
 
     async def start(self):
         async with self.operations:
+            if self.repo.doc['runtime'].get('correction_required'):
+                return 'وصل تصحيح مالي متأخر؛ استخدم إيقاف التشغيل ثم تشغيل جديد لإعادة السلسلة بأمان.'
             if self.pause_requested or paused(self.repo.doc):
                 return 'التشغيل متوقف مؤقتاً؛ استخدم استمرار لاستعادة نفس الحالة.'
             if self.task and not self.task.done():
@@ -343,7 +387,8 @@ class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
             if await self.enforce_limits(notify=False):
                 return limit_stop_text(self.repo.doc)
             if self.pending and self.pending.get('strict_result'):
-                return 'توجد صفقة غير محسومة. استخدم تحقق من الصفقة المعلّقة؛ لن تُعاد أو تُحسب خسارة.'
+                await self.repo.archive_pending('upgrade_restart',next_step=int(self.repo.doc['runtime'].get('martingale_step',0)))
+                if self.po and callable(getattr(self.po,'retire_order',None)):self.po.retire_order()
             if self.pending:
                 await self.repo.acknowledge_pending()
                 print('[WORKER] previous uncertain order auto-archived as UNCONFIRMED '
@@ -445,6 +490,11 @@ class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
             while not self.stop_event.is_set():
                 if not self.repo.leader:
                     raise RuntimeError('lease_lost')
+                wait_until=float(self.repo.doc['runtime'].get('entry_not_before',0))
+                if time.time()<wait_until:
+                    self.stage='previous_order_expiry'
+                    await self._pause(min(1,wait_until-time.time()))
+                    continue
                 if await self.enforce_limits():
                     break
                 if not await self.cycle_gate(int(self.repo.doc['runtime'].get('martingale_step',0))):
@@ -556,7 +606,7 @@ class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
                              recovery_context=deepcopy(recovery_context),
                              account_id=self.repo.doc.get('active_account_id'),duration_seconds=t['duration_seconds'],
                              strict_result=getattr(self.po,'strict_results',False) is True,
-                             request_id=uuid4().hex,martingale_steps=t['martingale_steps'],effective_base=effective_base,
+                             request_id=secrets.randbelow(1_999_999_998)+1,martingale_steps=t['martingale_steps'],effective_base=effective_base,
                              sequence_loss_before=self.repo.doc['runtime'].get('sequence_loss_amount',0.0))
                 if order['amount'] > self.po.balance:
                     raise SafeIssue('INSUFFICIENT_BALANCE')
@@ -595,14 +645,27 @@ class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
                 prev_step = mm.step
                 if result is None and order['strict_result']:
                     await self.po.flush_evidence()
-                    await self.repo.mark_uncertain(order)
-                    self.in_flight=False;self.stop_event.set();self.stage='result_unconfirmed'
-                    print('[RESULT] unresolved order retained; no loss, no recovery debt, no new entries',flush=True)
-                    if getattr(self.po,'tracker',None):
-                        self.settlement_watch_task=asyncio.create_task(self._watch_pending_settlement(deepcopy(self.pending),self.po))
-                    if self.notify:
-                        with suppress(Exception):await asyncio.wait_for(self.notify('⏸ نتيجة الصفقة لم تتأكد بعد. التداول متوقف دون خسارة أو تدبيل؛ ننتظر نفس معرّف الصفقة.'),5)
-                    break
+                    # The timeout must not lock controls. Keep an auditable unknown,
+                    # retain the level without doubling, retire ID for late reports.
+                    await self.repo.archive_pending('result_timeout',next_step=mm.step)
+                    hold=float(getattr(self.po,'order_expiry_wall',0) or 0)
+                    if hold:await self.repo.set_entry_guard(hold)
+                    if callable(getattr(self.po,'retire_order',None)):self.po.retire_order()
+                    self.in_flight=False;self.stage='unconfirmed_archived'
+                    print('[RESULT] unknown archived, level unchanged, controls unlocked',flush=True)
+                    if self.notify and time.monotonic()-getattr(self,'_unknown_notice_at',0)>30:
+                        self._unknown_notice_at=time.monotonic()
+                        with suppress(Exception):await asyncio.wait_for(self.notify('لم تصل نتيجة كافية؛ أُرشفت الصفقة غير مؤكدة دون خسارة أو تدبيل. التحكم متاح والتداول يستمر بنفس المستوى ما لم تطلب إيقافاً.'),5)
+                    if self.repo.doc['runtime'].get('unconfirmed_streak',0)>=3:
+                        self.stop_event.set();self.stage='unconfirmed_streak'
+                        if self.notify:
+                            with suppress(Exception):await asyncio.wait_for(self.notify('تكررت 3 نتائج غير مؤكدة؛ أُوقف الدخول احتياطياً. الأزرار متاحة: إيقاف التشغيل ثم تشغيل جديد أو مراجعة الاتصال.'),5)
+                        break
+                    self.cycle_force_rest=True
+                    if await self.enforce_limits():break
+                    if not await self.cycle_gate(mm.step):continue
+                    await self._pause(max(.5,t['loop_delay_seconds']))
+                    continue
                 if result is None:
                     # Uncertain outcome: NEVER stop and never force a manual review.
                     # Keep the SAME martingale step (no doubling on an unverified trade),
@@ -638,6 +701,7 @@ class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
                 await self.repo.resolve(order, result, before, self.po.balance, mm.step,
                                         seq_lost=seq_lost, seq_lost_amount=seq_lost_amount)
                 self.in_flight = False
+                if order.get('strict_result') and callable(getattr(self.po,'retire_order',None)):self.po.retire_order()
                 if await self.enforce_limits():
                     break
                 if not await self.cycle_gate(mm.step):
@@ -655,7 +719,7 @@ class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
             if self.pause_requested:
                 try:await self.complete_manual_pause()
                 except Exception as exc:print(f'[PAUSE] persistence failed ({type(exc).__name__}); entries remain disabled',flush=True)
-            if self.stage not in ('error', 'error_review', 'limit_reached', 'payout_stopped', 'time_limit_reached','result_unconfirmed','settlement_confirmed','paused','pause_waiting_result'):
+            if self.stage not in ('error', 'error_review', 'limit_reached', 'payout_stopped', 'time_limit_reached','result_unconfirmed','settlement_confirmed','paused','pause_waiting_result','result_corrected','unconfirmed_streak'):
                 self.stage = 'stopped'
 
     async def close(self):
@@ -663,7 +727,7 @@ class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
         if watch and not watch.done():
             watch.cancel()
             with suppress(asyncio.CancelledError):await watch
-        await self.stop()
+        async with self.operations:await self._stop()
         if self.po:
             await self.po.close()
         if self.tg:

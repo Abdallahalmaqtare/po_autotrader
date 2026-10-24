@@ -1,21 +1,16 @@
 {
-  "build": "v22-websocket-pause-account-tools",
-  "offline_tests": 272,
+  "build": "v23-compatible-results-clear-controls",
+  "offline_tests": 300,
   "passed": true,
   "live_account_tested": false,
-  "network_issue_root_cause_for_user_confirmed": false,
-  "compatibility_cases_tested": [
-    "bytes_socketio",
-    "bytes_engine_open",
-    "bare_balance",
-    "explicit_proxy",
-    "pause_pending_then_resume"
-  ],
-  "uploaded_v20_sha256": "5562f998ed33bb9f7fefe452dee0d0ed966a2b2aca20a0bf485cc07194b52796",
-  "retained_core_sha256": {
+  "balance_fallback_is_inference": true,
+  "unknown_results_are_not_draws": true,
+  "full_stop_resets_run_not_statistics": true,
+  "unchanged_core_sha256": {
     "pocket_option.py": "2b8678e81bb48d23ba82fc575d550653bb364f86bcf952564e8ab16e7eb63073",
     "martingale.py": "3bec3b0fc32ec081c6761cefc7e36aec8defe02b0f252826af44652c1e2e44eb",
     "telegram_signal.py": "3d478052a70c153def998ab38eb7497050794bce6dfa1b51eb6319df0742d9f2",
     "logger.py": "cee9bcf05229308aecdf0628c9cf4d52d088ab650e70bcd7d06a5fb91ae4a8e9"
-  }
+  },
+  "input_sha256": "86aa961616bcf0b7d96887342dc0e0922487158a9f573595cfeac93f2c8c09e9"
 }

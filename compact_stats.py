@@ -24,7 +24,7 @@ def compact_report(repo, worker):
              f"{status} | {d['account_mode']} | UID: {identity['uid'] or '—'}",
              f"💱 {t['asset']} | ⏱ {t['duration_seconds']}ث | أساس ${t['trade_amount']:g}",
              '━━━━━━━━━━━━━━━━',
-             f"الصفقات: {s['total_trades']:,} | النجاح: {rate:.1f}%",
+             f"الصفقات المحسومة: {s['won_trades']+s['lost_trades']+s['draws']:,} | النجاح: {rate:.1f}%",
              f"رابحة: {s['won_trades']:,} | خاسرة: {s['lost_trades']:,} | تعادل: {s['draws']:,}",
              f"سلاسل مستنفدة: {s['sequence_losses']:,} | خسارتها: ${s['lost_amount']:,.2f}",
              '━━━━━━━━━━━━━━━━',
