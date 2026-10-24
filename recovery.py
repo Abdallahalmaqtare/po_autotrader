@@ -91,7 +91,8 @@ def after_result(settings, state, order, result, before, after, seq_lost):
         state.update(sequence_signature=deepcopy(order.get('sizing_signature')),
                      sequence_pnl=0.0, sequence_known=True)
     b, a = number(before), number(after)
-    delta = a-b if b is not None and a is not None and result in ('win','loss','draw') else None
+    receipt=order.get('settlement')
+    delta = number(receipt.get('net_pnl')) if receipt and result in ('win','loss','draw') else (a-b if b is not None and a is not None and result in ('win','loss','draw') else None)
     if delta is None:
         state['sequence_known'] = False
         if state['active']:

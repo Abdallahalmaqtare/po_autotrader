@@ -1,9 +1,18 @@
 {
-  "build": "v20-payout-cycle-fix",
-  "offline_tests": 190,
+  "build": "v22-websocket-pause-account-tools",
+  "offline_tests": 272,
   "passed": true,
-  "live_trading_tested": false,
-  "unchanged_v19_core_sha256": {
+  "live_account_tested": false,
+  "network_issue_root_cause_for_user_confirmed": false,
+  "compatibility_cases_tested": [
+    "bytes_socketio",
+    "bytes_engine_open",
+    "bare_balance",
+    "explicit_proxy",
+    "pause_pending_then_resume"
+  ],
+  "uploaded_v20_sha256": "5562f998ed33bb9f7fefe452dee0d0ed966a2b2aca20a0bf485cc07194b52796",
+  "retained_core_sha256": {
     "pocket_option.py": "2b8678e81bb48d23ba82fc575d550653bb364f86bcf952564e8ab16e7eb63073",
     "martingale.py": "3bec3b0fc32ec081c6761cefc7e36aec8defe02b0f252826af44652c1e2e44eb",
     "telegram_signal.py": "3d478052a70c153def998ab38eb7497050794bce6dfa1b51eb6319df0742d9f2",

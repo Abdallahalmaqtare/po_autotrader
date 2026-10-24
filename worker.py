@@ -22,9 +22,11 @@ from telegram_bootstrap import session_from_env, signal_username
 from diagnostics import SafeIssue, diagnose_exception
 from risk_limits import risk_state, limit_stop_text
 from recovery import sizing, selected_state
+from manual_pause import ManualPause,paused
+from ws_connection import connection_text,is_retryable
 
 
-class TradingWorker(PayoutWorkflow, CycleWorkflow):
+class TradingWorker(ManualPause,PayoutWorkflow, CycleWorkflow):
     def __init__(self, repo, po_factory=CloudPocket, telegram_factory=TelegramClient):
         self.repo = repo
         self.po_factory = po_factory
@@ -50,6 +52,8 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
         self.payout_refresh_requested=False
         self.cycle_note=''
         self.cycle_force_rest=False
+        self.pause_requested=paused(self.repo.doc)
+        self._signal_binding=None
 
     @property
     def pending(self):
@@ -103,7 +107,9 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
     async def _telegram(self):
         # A live socket is NOT sufficient: v11 could leave an uninitialized
         # client after get_entity failed, then skip initialization on retry.
-        if self.tg and self.tg.is_connected() and self.listener is not None:
+        target=signal_username(self.repo.doc.get('signal_bot_username') or config.SIGNAL_BOT_USERNAME)
+        if self.tg and self.tg.is_connected() and self.listener is not None and self._signal_binding in (None,target):
+            self._signal_binding=target
             return
         if self.tg:
             with suppress(Exception):
@@ -111,7 +117,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
         self.tg, self.listener = None, None
         self.stage = 'telegram_session_parse'
         session = session_from_env(config.TELEGRAM_STRING_SESSION)
-        config.SIGNAL_BOT_USERNAME = signal_username(config.SIGNAL_BOT_USERNAME)
+        config.SIGNAL_BOT_USERNAME = target
         try:
             self.stage = 'telegram_client_create'
             self.tg = self.telegram_factory(session, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
@@ -127,6 +133,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 if not getattr(listener.bot_entity, 'bot', False):
                     raise SafeIssue('SIGNAL_TARGET_NOT_BOT')
                 self.listener = listener
+                self._signal_binding=target
         except BaseException:
             if self.tg:
                 with suppress(Exception):
@@ -137,13 +144,15 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
     async def diagnose(self):
         """Connection-only diagnostics; never presses New signal or sends an order."""
         async with self.operations:
+            if self.pending and self.pending.get('strict_result'):
+                return 'هناك صفقة غير محسومة؛ استخدم تحقق من الصفقة المعلّقة دون قطع الاتصال.'
             if self.task and not self.task.done():
                 return 'أوقف التداول أولاً لإجراء فحص اتصال مستقل؛ لن تتم مقاطعة صفقة جارية.'
             try:
                 self.stage = 'telegram_session_parse'
                 session_from_env(config.TELEGRAM_STRING_SESSION)
                 self.stage = 'signal_bot_resolve'
-                signal_username(config.SIGNAL_BOT_USERNAME)
+                signal_username(self.repo.doc.get('signal_bot_username') or config.SIGNAL_BOT_USERNAME)
                 await self._telegram()
                 self.stage = 'pocket_credentials'
                 await self.connect_account()
@@ -157,7 +166,133 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 self.stage = 'error_review' if self.pending else 'error'
                 return diagnostic.public_text()
 
-    async def connect_account(self):
+    async def add_account(self,credentials,mode,name=''):
+        from account_registry import make_record,account_key
+        record=make_record(credentials,mode,name)
+        key=account_key(record['uid'],mode)
+        async with self.operations:
+            if self.in_flight or self.pending:raise ValueError('انتظر حسم الصفقة المعلّقة قبل تعديل الحسابات')
+            if key==self.repo.doc.get('active_account_id') and self.running:
+                raise ValueError('أوقف التداول أولاً لتحديث جلسة الحساب النشط')
+            result=await self.repo.save_account(credentials,mode,name)
+            if key==self.repo.doc.get('active_account_id') and self.po:
+                await self.po.close()
+            return result
+
+    async def edit_account(self,key,fields):
+        async with self.operations:
+            if self.pending or self.in_flight:raise ValueError('انتظر حسم الصفقة قبل تعديل الحساب')
+            active=key==self.repo.doc.get('active_account_id')
+            if active and self.running:raise ValueError('اضغط إيقاف مؤقت وانتظر اكتماله أولاً')
+            await self.repo.edit_account(key,fields)
+            if active and self.po and set(fields)&{'ssid','uid','ws_url'}:
+                await self.po.close()
+            return 'تم تعديل بيانات الحساب دون مسح الإحصائيات. استخدم فحص WebSocket ثم استمرار.'
+
+    async def delete_account(self,key):
+        async with self.operations:
+            if self.pending or self.in_flight:raise ValueError('انتظر حسم الصفقة قبل حذف الحساب')
+            if key==self.repo.doc.get('active_account_id'):
+                if self.running:raise ValueError('أوقف التشغيل مؤقتاً قبل حذف الحساب النشط')
+                if self.po:await self.po.close()
+            await self.repo.delete_account(key)
+            self.pause_requested=paused(self.repo.doc)
+            return 'حُذف الحساب من القائمة ومُسحت جلسته ورابطه. السجل المالي محفوظ للأرشفة ولم يبدأ حساب آخر تلقائياً.'
+
+    async def change_signal_source(self,raw):
+        try:target=signal_username(raw)
+        except SafeIssue:raise ValueError('أدخل يوزر بوت صالحاً أو رابط t.me مباشراً؛ لا تُقبل روابط مواقع أخرى') from None
+        async with self.operations:
+            if self.running or self.in_flight or self.pending:
+                raise ValueError('أكمل الإيقاف المؤقت وانتظر نتيجة الصفقة أولاً لتغيير بوت الإشارات')
+            await self.repo.update({'signal_bot_username':target})
+            if self.listener and callable(getattr(self.listener,'disarm',None)):self.listener.disarm()
+            if self.tg:
+                with suppress(Exception):await self.tg.disconnect()
+            self.tg=None;self.listener=None;self._signal_binding=None
+            config.SIGNAL_BOT_USERNAME=target
+            return 'حُفظ بوت الإشارات: @'+target+'\nتُفحص هويته كبوت عند الاتصال؛ لم يبدأ التداول.'
+
+    async def diagnose_websocket(self):
+        async with self.operations:
+            if self.pending or self.in_flight:return connection_text(self.po)+'\nانتظار صفقة؛ لا نقطع الاتصال لفحص جديد.'
+            if self.running:return connection_text(self.po)+'\nالاتصال مستخدم في التداول؛ استخدم الإيقاف المؤقت لفحص مستقل.'
+            try:
+                self.stage='pocket_connect';await self.connect_account()
+                t=self.repo.doc['trading'];await self.po.select_asset(t['asset'],t['duration_seconds'])
+                deadline=time.monotonic()+min(config.CONNECT_TIMEOUT_SECONDS,5)
+                while self.po.balance is None and self.po.connected and time.monotonic()<deadline:await asyncio.sleep(.05)
+                self.stage='paused' if self.pause_requested else 'websocket_ready'
+                return connection_text(self.po)+'\nلم تُطلب إشارة ولم تُرسل صفقة.'
+            except Exception as exc:
+                diagnostic=await self.record_error(exc,send_notification=False)
+                return connection_text(self.po)+'\n'+diagnostic.public_text()
+
+    async def select_account(self,key):
+        async with self.operations:
+            if self.in_flight or self.pending:raise ValueError('انتظر حسم الصفقة المفتوحة قبل تبديل الحساب')
+            if key==self.repo.doc.get('active_account_id'):
+                return 'هذا هو الحساب النشط بالفعل؛ لم يتغير التداول أو السجل.'
+            await self._stop(immediate=True)
+            if self.po:await self.po.close()
+            await self.repo.select_account(key)
+            self.pause_requested=paused(self.repo.doc)
+            self.stop_event.set();self.stage='account_selected'
+            # Selection is not a Start command and never restarts REAL trading.
+            try:
+                await self.connect_account()
+                return 'تم اختيار الحساب والاتصال به. التداول متوقف؛ اضغط بدء عند الاستعداد.'
+            except Exception as exc:
+                diagnostic=await self.record_error(exc,send_notification=False)
+                return 'تم اختيار الحساب؛ تعذّر الاتصال. التداول متوقف.\n'+diagnostic.public_text()
+
+    async def _save_pending_receipt(self,order,receipt):
+        if not receipt:return False
+        current=self.repo.doc['runtime'].get('pending')
+        if not current or current['id']!=order['id']:return False
+        order=deepcopy(order);order['settlement']=deepcopy(receipt)
+        mm=MoneyManager(order.get('effective_base',order['amount']/(2**order['step'])),order.get('martingale_steps',4))
+        mm.step=order['step'];result=receipt['result'];mm.register_result(result)
+        seq_lost=int(result=='loss' and order['step']>=mm.max_doubles-1)
+        loss_amount=float(order.get('sequence_loss_before',0))+abs(receipt['net_pnl']) if seq_lost else 0.0
+        await self.repo.resolve(order,result,None,None,mm.step,seq_lost=seq_lost,seq_lost_amount=loss_amount)
+        self.stage='settlement_confirmed'
+        if self.pause_requested:await self.complete_manual_pause()
+        await self.enforce_limits()
+        if self.notify:
+            with suppress(Exception):
+                await asyncio.wait_for(self.notify(f"✅ حُسمت الصفقة المتأخرة: {result} | الصافي ${receipt['net_pnl']:+.2f}\nالتداول متوقف؛ لم تُكرر الصفقة."),5)
+        return True
+
+    async def _watch_pending_settlement(self,order,po):
+        try:
+            # Keep observing the SAME live socket; never resubmit or navigate.
+            await asyncio.wait_for(po.tracker.ready.wait(),600)
+            await po.flush_evidence()
+            if po.tracker.conflict:return
+            async with self.operations:
+                if self.po is po:await self._save_pending_receipt(order,po.tracker.settlement)
+        except (TimeoutError,asyncio.CancelledError):pass
+        except Exception as exc:
+            print(f'[RESULT] late settlement not committed ({type(exc).__name__})',flush=True)
+
+    async def reconcile_pending(self):
+        async with self.operations:
+            order=deepcopy(self.pending)
+            if not order:return 'لا توجد صفقة معلّقة.'
+            if not order.get('strict_result'):return 'الأمر من إصدار قديم بلا معرّف منصة موثوق؛ راجعه على المنصة.'
+            if self.running or self.in_flight:return 'جارٍ انتظار نتيجة الصفقة الحالية؛ لم تُعد إرسالها.'
+            if self.po and self.po.connected and getattr(self.po,'tracker',None) and self.po.tracker.order['id']==order['id']:
+                if await self._save_pending_receipt(order,self.po.tracker.settlement):return 'حُفظت نتيجة الصفقة المؤكدة مرة واحدة.'
+                return 'لم تصل نتيجة إغلاق مؤكدة بعد؛ لا خسارة ولا تدبيل.'
+            await self.connect_account(pending_order=order)
+            result=await self.po.wait_for_result(min(30,config.CONNECT_TIMEOUT_SECONDS))
+            if result and await self._save_pending_receipt(order,self.po.last_settlement):return 'تمت مطابقة الصفقة وحفظ نتيجتها.'
+            return 'لم تصل نتيجة قابلة للمطابقة؛ التداول متوقف دون احتساب خسارة.'
+
+    async def connect_account(self,pending_order=None):
+        if self.pending and self.pending.get('strict_result') and pending_order is None:
+            raise ValueError('لا نعيد الاتصال قبل حسم الصفقة المعلّقة')
         if self.po:
             await self.po.close()
         mode = self.repo.doc['account_mode']
@@ -170,6 +305,9 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
             raise SafeIssue('PO_CREDENTIALS_INVALID') from None
         self.stage = 'pocket_connect'
         self.po = self.po_factory(credentials, mode)
+        if getattr(self.po,'strict_results',False) is True:
+            self.po.on_evidence=self.repo.record_broker_id
+            if pending_order:self.po.prepare_order(pending_order)
         await self.po.connect()
 
     async def enforce_limits(self, notify=True):
@@ -196,12 +334,16 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
 
     async def start(self):
         async with self.operations:
+            if self.pause_requested or paused(self.repo.doc):
+                return 'التشغيل متوقف مؤقتاً؛ استخدم استمرار لاستعادة نفس الحالة.'
             if self.task and not self.task.done():
                 return 'الحلقة تعمل بالفعل أو جارٍ تشغيلها.'
             if not self.repo.leader:
                 raise RuntimeError('lease_not_owned')
             if await self.enforce_limits(notify=False):
                 return limit_stop_text(self.repo.doc)
+            if self.pending and self.pending.get('strict_result'):
+                return 'توجد صفقة غير محسومة. استخدم تحقق من الصفقة المعلّقة؛ لن تُعاد أو تُحسب خسارة.'
             if self.pending:
                 await self.repo.acknowledge_pending()
                 print('[WORKER] previous uncertain order auto-archived as UNCONFIRMED '
@@ -214,7 +356,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 self.stage = 'telegram_session_parse'
                 session_from_env(config.TELEGRAM_STRING_SESSION)
                 self.stage = 'signal_bot_resolve'
-                signal_username(config.SIGNAL_BOT_USERNAME)
+                signal_username(self.repo.doc.get('signal_bot_username') or config.SIGNAL_BOT_USERNAME)
             except Exception as exc:
                 diagnostic = await self.record_error(exc, send_notification=False)
                 self.stage = 'error'
@@ -232,6 +374,10 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
     async def change(self, fields, reconnect=False):
         """Serialized account changes; ordinary trading changes start next cycle."""
         async with self.operations:
+            if reconnect and (self.in_flight or (self.pending and self.pending.get('strict_result'))):
+                raise ValueError('لا يمكن تغيير بيانات الحساب قبل حسم الصفقة المفتوحة')
+            if self.pause_requested and self.pending and any(k in fields for k in ('trading.asset','trading.duration_seconds')):
+                raise ValueError('انتظر نتيجة الصفقة واكتمال الإيقاف المؤقت قبل تعديل الزوج أو المدة')
             was_running = self.running
             selection_requested = any(key in fields for key in ('trading.asset','trading.duration_seconds'))
             if reconnect:
@@ -289,6 +435,9 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
 
     async def _run(self):
         try:
+            if not self.po or not self.po.connected:
+                try:await self.connect_account()
+                except (TimeoutError,ConnectionError,OSError):pass
             await self._telegram()
             mm = None
             signature = None
@@ -300,6 +449,8 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                     break
                 if not await self.cycle_gate(int(self.repo.doc['runtime'].get('martingale_step',0))):
                     continue
+                if self.pending and self.pending.get('strict_result'):
+                    self.stage='result_unconfirmed';self.stop_event.set();break
                 if self.pending:
                     await self.repo.acknowledge_pending()
                     print('[WORKER] stale pending marker auto-archived; continuing', flush=True)
@@ -311,6 +462,8 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 effective_base, recovery_context = sizing(self.repo.doc, mode)
                 self.apply_snapshot(mode, t)
                 sig = (mode, t['asset'], effective_base, t['martingale_steps'])
+                if self.repo.doc.get('active_account_id'):
+                    sig += (self.repo.doc['active_account_id'],)
                 if recovery_context['enabled']:
                     sig += (recovery_context['epoch'],)
                 if sig != signature:
@@ -321,7 +474,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                     mm = MoneyManager(effective_base, t['martingale_steps'])
                     mm.step = int(self.repo.doc['runtime'].get('martingale_step', 0))
                     signature = sig
-                    chain_stake = 0.0
+                    chain_stake = float(self.repo.doc['runtime'].get('sequence_loss_amount',0))
                 if not self.po or not self.po.connected or self.po.mode != mode:
                     self.stage = 'connecting'
                     try:
@@ -330,7 +483,12 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                         self.stage = 'reconnecting'
                         await self._pause(5)
                         continue
-                await self.po.select_asset(t['asset'], t['duration_seconds'])
+                try:
+                    await self.po.select_asset(t['asset'], t['duration_seconds'])
+                except Exception as exc:
+                    if not is_retryable(exc):raise
+                    await self.po.close()
+                    self.stage='reconnecting';await self._pause(2);continue
                 # A baseline balance is necessary. Wait up to connection timeout,
                 # but never send an order while no account balance is known.
                 deadline = time.monotonic() + config.CONNECT_TIMEOUT_SECONDS
@@ -349,9 +507,14 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 changed_task=asyncio.create_task(self.selection_changed.wait())
                 payout_task=asyncio.create_task(self.wait_payout_change(t,payout_policy))
                 cycle_task=asyncio.create_task(self.wait_cycle_boundary(mm.step))
+                disconnected=getattr(self.po,'disconnect_event',None)
+                async def wait_disconnect():
+                    if isinstance(disconnected,asyncio.Event):await disconnected.wait()
+                    else:await asyncio.Event().wait()
+                disconnect_task=asyncio.create_task(wait_disconnect())
                 try:
-                    done,_=await asyncio.wait((signal_task,changed_task,payout_task,cycle_task),return_when=asyncio.FIRST_COMPLETED)
-                    if changed_task in done or payout_task in done or cycle_task in done:
+                    done,_=await asyncio.wait((signal_task,changed_task,payout_task,cycle_task,disconnect_task),return_when=asyncio.FIRST_COMPLETED)
+                    if changed_task in done or payout_task in done or cycle_task in done or disconnect_task in done:
                         continue
                     try:
                         direction=await signal_task
@@ -361,7 +524,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                         await self._pause(2)
                         continue
                 finally:
-                    for task in (signal_task,changed_task,payout_task,cycle_task):
+                    for task in (signal_task,changed_task,payout_task,cycle_task,disconnect_task):
                         if not task.done(): task.cancel()
                         with suppress(asyncio.CancelledError,Exception):
                             await task
@@ -390,7 +553,11 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 order = dict(id=uuid4().hex, mode=mode, amount=mm.current_amount(),
                              asset=t['asset'], direction=direction,
                              created_at=time.time(), step=mm.step, sizing_signature=list(sig),
-                             recovery_context=deepcopy(recovery_context))
+                             recovery_context=deepcopy(recovery_context),
+                             account_id=self.repo.doc.get('active_account_id'),duration_seconds=t['duration_seconds'],
+                             strict_result=getattr(self.po,'strict_results',False) is True,
+                             request_id=uuid4().hex,martingale_steps=t['martingale_steps'],effective_base=effective_base,
+                             sequence_loss_before=self.repo.doc['runtime'].get('sequence_loss_amount',0.0))
                 if order['amount'] > self.po.balance:
                     raise SafeIssue('INSUFFICIENT_BALANCE')
                 # Persist BEFORE send: redeploy must never automatically repeat an uncertain order.
@@ -405,6 +572,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 result = None
                 try:
                     self.po.entry_check=lambda: self.entry_eligible(t,payout_policy,mode)
+                    if order['strict_result']:self.po.prepare_order(order)
                     ok = await asyncio.wait_for(self.po.place_trade(direction, order['amount']),
                                                  config.CONNECT_TIMEOUT_SECONDS)
                     before = self.po._balance_before
@@ -420,8 +588,21 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 except Exception as send_err:
                     print(f'[WORKER] send/result error ({type(send_err).__name__}) - continuing', flush=True)
                     ok = False
-                chain_stake += order['amount']
+                receipt=getattr(self.po,'last_settlement',None) if order['strict_result'] else None
+                if order['strict_result'] and (not receipt or receipt.get('order_id')!=order['id']):result=None
+                if receipt:order['settlement']=deepcopy(receipt)
+                if result=='loss':chain_stake += abs(receipt['net_pnl']) if receipt else order['amount']
                 prev_step = mm.step
+                if result is None and order['strict_result']:
+                    await self.po.flush_evidence()
+                    await self.repo.mark_uncertain(order)
+                    self.in_flight=False;self.stop_event.set();self.stage='result_unconfirmed'
+                    print('[RESULT] unresolved order retained; no loss, no recovery debt, no new entries',flush=True)
+                    if getattr(self.po,'tracker',None):
+                        self.settlement_watch_task=asyncio.create_task(self._watch_pending_settlement(deepcopy(self.pending),self.po))
+                    if self.notify:
+                        with suppress(Exception):await asyncio.wait_for(self.notify('⏸ نتيجة الصفقة لم تتأكد بعد. التداول متوقف دون خسارة أو تدبيل؛ ننتظر نفس معرّف الصفقة.'),5)
+                    break
                 if result is None:
                     # Uncertain outcome: NEVER stop and never force a manual review.
                     # Keep the SAME martingale step (no doubling on an unverified trade),
@@ -471,10 +652,17 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
         finally:
             self.running = False
             self.in_flight = False
-            if self.stage not in ('error', 'error_review', 'limit_reached', 'payout_stopped', 'time_limit_reached'):
+            if self.pause_requested:
+                try:await self.complete_manual_pause()
+                except Exception as exc:print(f'[PAUSE] persistence failed ({type(exc).__name__}); entries remain disabled',flush=True)
+            if self.stage not in ('error', 'error_review', 'limit_reached', 'payout_stopped', 'time_limit_reached','result_unconfirmed','settlement_confirmed','paused','pause_waiting_result'):
                 self.stage = 'stopped'
 
     async def close(self):
+        watch=getattr(self,'settlement_watch_task',None)
+        if watch and not watch.done():
+            watch.cancel()
+            with suppress(asyncio.CancelledError):await watch
         await self.stop()
         if self.po:
             await self.po.close()

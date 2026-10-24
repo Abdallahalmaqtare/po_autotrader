@@ -6,7 +6,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramAPIError
 import config
 from cloud_settings import MODES, DURATIONS, valid_number, valid_url, auth_frame
 from forex_assets import FOREX_OTC, SYMBOL_NAMES
@@ -16,6 +16,9 @@ from branded_ui import get_panels
 from recovery import recovery_text, short_summary
 from compact_stats import compact_report
 from work_cycle import cycle_text
+from account_registry import account_label,registry_text,credential_key,safe_name
+from account_details import positive_uid
+from ws_connection import connection_text
 
 
 class AdminOnly(BaseMiddleware):
@@ -34,6 +37,10 @@ class AdminOnly(BaseMiddleware):
 
 class Input(StatesGroup):
     credential = State()
+    account_uid = State()
+    account_name = State()
+    account_edit = State()
+    signal_source = State()
     url = State()
     number = State()
     limit = State()
@@ -47,12 +54,16 @@ def kb(rows):
         InlineKeyboardButton(text=text, callback_data=value) for text, value in row] for row in rows])
 
 
-def home():
-    return kb([[('▶️ بدء التداول', 'start'), ('⏹ إيقاف التداول', 'stop')],
-               [('📊 الإحصائيات', 'stats'), ('🔄 الحالة', 'status')],
-               [('⚙️ الإعدادات', 'settings'), ('👤 الحسابات', 'accounts')],
-               [('🛟 التعزيز', 'recovery'), ('🛡 الحدود', 'limits')],
-               [('🧰 الأدوات والصيانة', 'tools')]])
+def home(worker=None):
+    if worker and (worker.pause_requested or worker.repo.doc['runtime'].get('manual_pause',{}).get('requested')):
+        primary=('⏳ انتظار نتيجة الصفقة','pause') if worker.pending or worker.in_flight else ('▶️ استمرار','resume')
+    elif worker and worker.running:primary=('⏸ إيقاف مؤقت','pause')
+    else:primary=('▶️ بدء / استمرار','resume')
+    return kb([[primary],
+               [('📊 الإحصائيات','stats'),('🔄 الحالة','status')],
+               [('⚙️ الإعدادات','settings'),('👤 إدارة الحسابات','accounts')],
+               [('🛟 التعزيز','recovery'),('🛡 الحدود','limits')],
+               [('🧰 الأدوات والصيانة','tools')]])
 
 
 def stats_kb():
@@ -61,7 +72,7 @@ def stats_kb():
 
 
 def tools_kb():
-    return kb([[('🧪 فحص الاتصال', 'diagnose')], [('🗑 تصفير السجل', 'reset_stats')],
+    return kb([[('🔌 فحص WebSocket فقط','ws_diagnose')], [('🤖 بوت الإشارات','signal_source')], [('🧪 فحص الاتصال', 'diagnose')], [('🗑 تصفير السجل', 'reset_stats')],
                [('🏠 الرئيسية', 'home')]])
 
 
@@ -70,6 +81,7 @@ def settings_kb():
                [('💵 المبلغ الأساسي', 'amount'), ('🪜 مستويات التدبيل', 'mg')],
                [('🛟 التعزيز', 'recovery'), ('🛡 حدود الربح والخسارة', 'limits')],
                [('📉 حماية عائد الزوج', 'payout'), ('⏱ التشغيل والراحة', 'cycle')],
+               [('🤖 بوت الإشارات','signal_source')],
                [('⚡ التوقيتات المتقدمة', 'timing')],
                [('👤 إدارة الحسابات', 'accounts'), ('🏠 الرئيسية', 'home')]])
 
@@ -129,12 +141,22 @@ def limits_text(doc):
             f"الصافي الحالي: ${s['net_pnl']:+.2f}\nأول حد مالي متحقق يمنع الدخول التالي.")
 
 
-def accounts_kb():
-    return kb([[('🟢 التحويل للحقيقي | Switch to Real', 'real_confirm')],
-               [('🟡 التحويل للتجريبي | Switch to Demo', 'mode:PRACTICE')],
-               [('✏️ تحديث بيانات الحقيقي', 'credentials:REAL')],
-               [('✏️ تحديث بيانات الديمو', 'credentials:PRACTICE')],
-               [('⬅️ الإعدادات', 'settings')]])
+def accounts_kb(doc=None):
+    return kb([[('📋 عرض الحسابات واختيار حساب','account:list:0')],
+               [('➕ إضافة حساب','account:add')],
+               [('🔎 الحساب النشط','account:active')],
+               [('🔌 فحص WebSocket','ws_diagnose')],
+               [('⬅️ الإعدادات','settings'),('🏠 الرئيسية','home')]])
+
+
+def account_list_kb(doc,page=0):
+    records=sorted(((k,r) for k,r in doc.get('accounts',{}).items() if not r.get('deleted')),key=lambda item:(item[1]['mode'],int(item[1]['uid'])))
+    pages=max(1,math.ceil(len(records)/8));page=max(0,min(page,pages-1))
+    rows=[[(account_label(record,key==doc.get('active_account_id')),f'account:pick:{key}')]
+          for key,record in records[page*8:page*8+8]]
+    if pages>1:
+        rows.append([('◀️',f'account:list:{max(0,page-1)}'),(f'{page+1}/{pages}','noop'),('▶️',f'account:list:{min(pages-1,page+1)}')])
+    return kb(rows+[[('➕ إضافة حساب','account:add')],[('⬅️ إدارة الحسابات','accounts')]])
 
 
 def assets_kb(page):
@@ -164,13 +186,19 @@ def build_dispatcher(repo, worker, bot):
     async def notify_diagnostic(text):
         await ui.notice('🔔 إشعار البوت\n' + text)
     worker.notify = notify_diagnostic
+    pause_panel_message=None
+    async def refresh_pause_panel():
+        # Do not pull the user out of settings/accounts after they navigated away.
+        if pause_panel_message is not None and ui.active and ui.active.message_id==pause_panel_message:
+            await ui.show('⏸ حُفظت نتيجة الصفقة واكتمل الإيقاف المؤقت. اضغط استمرار عند الاستعداد.',home(worker),view='pause')
+    worker.refresh_pause_panel=refresh_pause_panel
     dp.message.outer_middleware(AdminOnly())
     dp.callback_query.outer_middleware(AdminOnly())
 
     @dp.message(CommandStart())
     async def start_panel(msg: Message, state: FSMContext):
         await state.clear()
-        await ui.show('🎛 لوحة تحكم عبود Trading Controller\nلا يبدأ التداول تلقائياً بعد الإقلاع.', home(), view='home')
+        await ui.show('🎛 لوحة تحكم عبود Trading Controller\nلا يبدأ التداول تلقائياً بعد الإقلاع.', home(worker), view='home')
 
     @dp.message(Command('cancel'))
     async def cancel(msg: Message, state: FSMContext):
@@ -179,54 +207,77 @@ def build_dispatcher(repo, worker, bot):
 
     @dp.callback_query()
     async def callback(cb: CallbackQuery, state: FSMContext):
+        nonlocal pause_panel_message
         action = cb.data or ''
-        if action == 'stop':
-            worker.request_stop()
-        await cb.answer()
+        if action!='pause':pause_panel_message=None
+        if action == 'stop':worker.request_stop()
+        if action == 'pause':worker.request_pause()
+        with suppress(TelegramAPIError):await cb.answer()
         if action != 'noop':
             await state.clear()
         try:
             if action == 'noop':
                 return
             if action == 'home':
-                return await panel(bot, cb, '🎛 لوحة التحكم', home())
+                return await panel(bot, cb, '🎛 لوحة التحكم', home(worker))
+            if action == 'pause':
+                text=await worker.pause()
+                result=await panel(bot,cb,text,home(worker))
+                pause_panel_message=ui.active.message_id if ui.active else None
+                if not worker.pending and repo.doc['runtime'].get('manual_pause',{}).get('paused'):
+                    await refresh_pause_panel()
+                return result
+            if action == 'resume':
+                text=await worker.resume()
+                return await panel(bot,cb,text,home(worker))
+            if action == 'ws_diagnose':
+                text=await worker.diagnose_websocket()
+                return await panel(bot,cb,text,kb([[('🔄 فحص مجدداً','ws_diagnose')],[('👤 إدارة الحسابات','accounts')],[('🏠 الرئيسية','home')]]))
+            if action == 'signal_source':
+                target=repo.doc.get('signal_bot_username') or config.SIGNAL_BOT_USERNAME
+                return await panel(bot,cb,'🤖 بوت الإشارات الحالي: @'+target+'\nيجب أن يدعم مسار Trade → OTC → الزوج → المدة → Confirm → New signal.',kb([
+                    [('✏️ تغيير بوت الإشارات','signal_source_edit')],[('⬅️ الإعدادات','settings')]]))
+            if action == 'signal_source_edit':
+                if worker.running or worker.pending:raise ValueError('أكمل الإيقاف المؤقت وانتظر نتيجة الصفقة أولاً')
+                await state.set_state(Input.signal_source)
+                return await panel(bot,cb,'أرسل يوزر بوت الإشارات مثل @ExampleSignalBot أو رابط t.me. /cancel للإلغاء',None)
             if action == 'start':
                 text = await worker.start()
-                return await panel(bot, cb, text, home())
+                return await panel(bot, cb, text, home(worker))
             if action == 'stop':
                 # Mark stop before awaiting anything else.
                 worker.request_stop()
                 text = await worker.stop()
-                return await panel(bot, cb, text, home())
+                return await panel(bot, cb, text, home(worker))
             if action == 'reset_stats':
                 return await panel(bot, cb, '🗑 تصفير السجل\nسيتم إيقاف التداول وتصفير كل الإحصائيات '
-                                   'والعائد المالي لكلا الحسابين. هل أنت متأكد؟',
+                                   'لكل الحسابات المحفوظة. هل أنت متأكد؟',
                                    kb([[('نعم، صفّر السجل', 'reset_confirm')], [('إلغاء', 'home')]]))
             if action == 'reset_confirm':
                 await worker.stop()
                 await repo.reset_stats()
                 worker.stage = 'stopped'
                 return await panel(bot, cb, '✅ تم تصفير السجل بالكامل. التداول متوقف — اضغط Start للبدء من جديد.',
-                                   home())
+                                   home(worker))
             if action == 'stats':
                 return await panel(bot, cb, report(repo, worker), stats_kb())
             if action == 'diagnose':
                 text = await worker.diagnose()
-                return await panel(bot, cb, text, home())
+                return await panel(bot, cb, text, home(worker))
             if action == 'status':
                 text = (account_text(repo.doc, worker.po) + risk_summary(repo.doc) +
                         f"المرحلة: {worker.stage}\n"
                         +cycle_text(repo.doc)+'\n'+
 
-                        f"WebSocket: {'متصل' if worker.po and worker.po.connected else 'غير متصل'}\n"
+                        connection_text(worker.po)+'\n'+worker.pause_text()+'\n'+
                         f"MongoDB writer: {'فعال' if repo.leader else 'غير فعال'}\n"
                         f"الزوج: {repo.doc['trading']['asset']}\n"
                         f"آخر كود خطأ: {worker.last_error or 'لا يوجد'}\n"
                         'البيانات السرية لا تظهر في اللوحة.')
                 if worker.diagnostic:
                     text += '\n\n' + worker.diagnostic.public_text()
-                rows = [[('🔍 مراجعة الأمر المعلّق', 'review')], [('⬅️ الرئيسية', 'home')]] if worker.pending else None
-                return await panel(bot, cb, text, kb(rows) if rows else home())
+                rows = [[('🔍 تحقق من الصفقة المعلّقة', 'settle_review')], [('🗃 مراجعة وأرشفة يدوية', 'review')], [('⬅️ الرئيسية', 'home')]] if worker.pending else None
+                return await panel(bot, cb, text, kb(rows) if rows else home(worker))
             if action == 'payout_refresh':
                 text=await worker.refresh_payout_ui()
                 return await panel(bot,cb,text,payout_kb(repo.doc))
@@ -336,7 +387,65 @@ def build_dispatcher(repo, worker, bot):
             if action == 'settings':
                 return await panel(bot, cb, '⚙️ الإعدادات؛ التغييرات العادية تسري من الدورة القادمة.', settings_kb())
             if action == 'accounts':
-                return await panel(bot, cb, account_text(repo.doc, worker.po) + 'لا تُعرض قيم SSID.', accounts_kb())
+                return await panel(bot, cb, registry_text(repo.doc,worker.po), accounts_kb(repo.doc))
+            if action == 'account:active':
+                return await panel(bot,cb,account_text(repo.doc,worker.po),accounts_kb(repo.doc))
+            if action.startswith('account:list:'):
+                page=int(action.rsplit(':',1)[1])
+                return await panel(bot,cb,'📋 الحسابات المحفوظة\nUID · النوع · الاسم\n✅ الحساب النشط',account_list_kb(repo.doc,page))
+            if action == 'account:add':
+                return await panel(bot,cb,'➕ إضافة حساب — اختر النوع',kb([
+                    [('🟡 تجريبي PRACTICE','account:add:PRACTICE')],
+                    [('🟢 حقيقي REAL','account:add:REAL')],[('⬅️ إدارة الحسابات','accounts')]]))
+            if action.startswith('account:add:'):
+                mode=action.rsplit(':',1)[1]
+                if mode not in MODES:raise ValueError('نوع غير صالح')
+                await state.set_state(Input.credential)
+                await state.update_data(mode=mode,new_account=True)
+                return await panel(bot,cb,'أرسل إطار auth الكامل أو SSID. إن أرسلت SSID خاماً سنطلب UID.\nسنحاول حذف رسالة الجلسة؛ لا ترسل كلمة المرور. /cancel للإلغاء',None)
+            if action.startswith('account:pick:'):
+                key=action.split(':',2)[2];record=repo.doc.get('accounts',{}).get(key)
+                if not record:raise ValueError('الحساب غير موجود')
+                warning='⚠️ حساب حقيقي — يستخدم أموالاً حقيقية.\n' if record['mode']=='REAL' else ''
+                return await panel(bot,cb,warning+account_label(record)+'\nتأكيد اختيار الحساب؟ سيتوقف التداول عند التبديل.',kb([
+                    [('✅ اختيار هذا الحساب','account:select:'+key)],
+                    [('✏️ تعديل البيانات','account:edit:'+key),('🗑 حذف الحساب','account:delete:'+key)],
+                    [('إلغاء','account:list:0')]]))
+            if action.startswith('account:select:'):
+                key=action.split(':',2)[2]
+                text=await worker.select_account(key)
+                return await panel(bot,cb,text+'\n\n'+registry_text(repo.doc,worker.po),accounts_kb(repo.doc))
+            if action.startswith('account:edit:'):
+                key=action.split(':',2)[2];record=repo.doc.get('accounts',{}).get(key)
+                if not record or record.get('deleted'):raise ValueError('الحساب غير موجود')
+                return await panel(bot,cb,'✏️ تعديل '+account_label(record)+'\nلا يعرض البوت الجلسة أو الرابط المحفوظ.',kb([
+                    [('🔗 تغيير رابط WebSocket','account:field:ws_url:'+key)],
+                    [('🔐 تحديث SSID','account:field:ssid:'+key)],
+                    [('🏷 تغيير الاسم','account:field:name:'+key)],
+                    [('⬅️ القائمة','account:list:0')]]))
+            if action.startswith('account:field:'):
+                _,_,field,key=action.split(':',3)
+                if field not in ('name','ssid','ws_url'):raise ValueError('تعديل غير صالح')
+                record=repo.doc.get('accounts',{}).get(key)
+                if not record or record.get('deleted'):raise ValueError('الحساب غير موجود')
+                if worker.pending or (key==repo.doc.get('active_account_id') and worker.running):
+                    raise ValueError('أكمل الإيقاف المؤقت وانتظر الصفقة أولاً')
+                await state.set_state(Input.account_edit);await state.update_data(account_key=key,field=field)
+                prompts={'name':'أرسل الاسم الجديد أو /skip لمسح الاسم.',
+                         'ssid':'أرسل إطار auth أو SSID جديداً لنفس UID. لتغيير UID أضف حساباً آخر.',
+                         'ws_url':'أرسل رابط wss الجديد كاملاً من حساب المنصة.'}
+                return await panel(bot,cb,prompts[field]+'\n/cancel للإلغاء',None)
+            if action.startswith('account:delete:'):
+                key=action.split(':',2)[2];record=repo.doc.get('accounts',{}).get(key)
+                if not record or record.get('deleted'):raise ValueError('الحساب غير موجود')
+                return await panel(bot,cb,'🗑 تأكيد حذف '+account_label(record)+'\nتُمسح الجلسة والرابط وتبقى النتائج المالية للأرشفة.',kb([
+                    [('نعم، حذف الحساب','account:remove:'+key)],[('إلغاء','account:list:0')]]))
+            if action.startswith('account:remove:'):
+                key=action.split(':',2)[2];text=await worker.delete_account(key)
+                return await panel(bot,cb,text,account_list_kb(repo.doc))
+            if action == 'settle_review':
+                text=await worker.reconcile_pending()
+                return await panel(bot,cb,text,kb([[('🔄 تحقق مجدداً','settle_review')],[('🔄 الإحصائيات','stats')],[('⬅️ الرئيسية','home')]]))
             if action == 'limits':
                 return await panel(bot, cb, limits_text(repo.doc), limits_kb())
             if action.startswith('risk:'):
@@ -357,11 +466,12 @@ def build_dispatcher(repo, worker, bot):
                 return await panel(bot, cb, '⚠️ الحساب الحقيقي يستخدم أموالاً حقيقية. تأكيد التبديل؟',
                                    kb([[('تأكيد REAL', 'mode:REAL')], [('إلغاء', 'accounts')]]))
             if action.startswith('mode:'):
-                mode = action.split(':')[1]
-                if mode not in MODES:
-                    raise ValueError('حساب غير صالح')
-                text = await worker.change({'account_mode': mode}, reconnect=True)
-                return await panel(bot, cb, text + '\n' + account_text(repo.doc, worker.po), accounts_kb())
+                mode=action.split(':')[1]
+                if mode not in MODES:raise ValueError('حساب غير صالح')
+                key=repo.doc.get('active_accounts',{}).get(mode)
+                if not key:raise ValueError('أضف حساباً محفوظاً من إدارة الحسابات أولاً')
+                text=await worker.select_account(key)
+                return await panel(bot,cb,text+'\n'+registry_text(repo.doc,worker.po),accounts_kb(repo.doc))
             if action.startswith('credentials:'):
                 mode = action.split(':')[1]
                 if mode not in MODES:
@@ -405,46 +515,93 @@ def build_dispatcher(repo, worker, bot):
             if action == 'review_confirm':
                 await worker.stop()
                 await repo.acknowledge_pending()
-                return await panel(bot, cb, 'تمت الأرشفة؛ يلزم ضغط Start للبدء من جديد.', home())
+                return await panel(bot, cb, 'تمت الأرشفة؛ يلزم ضغط Start للبدء من جديد.', home(worker))
         except ValueError as e:
             await ui.notice(str(e), settings_kb(), view='error')
         except Exception as e:
             # Never echo raw exceptions containing Mongo URI/session/WS payloads.
-            await ui.notice(f'تعذّرت العملية ({type(e).__name__}). لم يُؤكّد نجاح التغيير؛ راجع الحالة.', home(), view='error')
+            await ui.notice(f'تعذّرت العملية ({type(e).__name__}). لم يُؤكّد نجاح التغيير؛ راجع الحالة.', home(worker), view='error')
+
+    @dp.message(Input.signal_source)
+    async def signal_source_input(msg:Message,state:FSMContext):
+        try:
+            text=await worker.change_signal_source(msg.text or '')
+            await state.clear();await ui.show(text,settings_kb(),view='settings')
+        except ValueError as exc:await ui.show(str(exc),view='settings')
+        except Exception as exc:await ui.show('تعذّر حفظ بوت الإشارات: '+type(exc).__name__,settings_kb(),view='settings')
+
+    @dp.message(Input.account_edit)
+    async def account_edit_input(msg:Message,state:FSMContext):
+        data=await state.get_data();field=data.get('field');key=data.get('account_key')
+        if field in ('ssid','ws_url'):
+            with suppress(Exception):await msg.delete()
+        try:
+            record=repo.doc.get('accounts',{}).get(key)
+            if not record or record.get('deleted'):raise ValueError('الحساب غير موجود')
+            value=msg.text or ''
+            if field=='ssid':value=auth_frame(value,record['mode'],int(record['uid']))
+            elif field=='ws_url':value=valid_url(value)
+            elif field=='name':value='' if value=='/skip' else safe_name(value)
+            else:raise ValueError('تعديل غير صالح')
+            text=await worker.edit_account(key,{field:value})
+            await state.clear();await ui.show(text,accounts_kb(repo.doc),view='accounts')
+        except ValueError as exc:await ui.show(str(exc),view='accounts')
+        except Exception as exc:await ui.show('تعذّر تأكيد التعديل: '+type(exc).__name__,accounts_kb(repo.doc),view='accounts')
 
     @dp.message(Input.credential)
-    async def credential(msg: Message, state: FSMContext):
-        data = await state.get_data()
-        raw = msg.text or ''
-        with suppress(Exception):
-            await msg.delete()
+    async def credential(msg: Message,state: FSMContext):
+        data=await state.get_data();raw=(msg.text or '').strip()
+        with suppress(Exception):await msg.delete()
         try:
-            mode = data['mode']
-            key = 'real_account' if mode == 'REAL' else 'demo_account'
-            frame = auth_frame(raw, mode, repo.doc[key].get('uid', 0))
-        except (ValueError, KeyError) as e:
-            await ui.show(str(e) if isinstance(e, ValueError) else 'أعد فتح إدارة الحسابات.', accounts_kb(), view='accounts')
-            return
-        await state.update_data(frame=frame)
-        await state.set_state(Input.url)
-        await ui.show('تم استلام الجلسة دون عرضها. أرسل رابط wss أو /skip لاعتماد الرابط الافتراضي لهذا الحساب.\n/cancel للإلغاء', view='accounts')
+            mode=data['mode']
+            if not raw.startswith('42'):
+                if not raw or len(raw)>20000:raise ValueError('SSID غير صالح')
+                await state.update_data(raw_ssid=raw)
+                await state.set_state(Input.account_uid)
+                return await ui.show('أرسل UID الرقمي الفعلي لهذا الحساب، وليس SSID آخر. /cancel للإلغاء',view='accounts')
+            frame=auth_frame(raw,mode)
+            await state.update_data(frame=frame)
+            await state.set_state(Input.url)
+            await ui.show('تم استلام الجلسة دون عرضها. أرسل رابط wss أو /skip للرابط الافتراضي. /cancel للإلغاء',view='accounts')
+        except (ValueError,KeyError) as exc:
+            await ui.show(str(exc) if isinstance(exc,ValueError) else 'أعد فتح إدارة الحسابات.',accounts_kb(repo.doc),view='accounts')
+
+    @dp.message(Input.account_uid)
+    async def account_uid(msg: Message,state: FSMContext):
+        data=await state.get_data();uid=positive_uid(msg.text)
+        if not uid:return await ui.show('UID يجب أن يكون رقماً موجباً فعلياً للحساب.',view='accounts')
+        try:
+            frame=auth_frame(data['raw_ssid'],data['mode'],int(uid))
+            await state.update_data(frame=frame,raw_ssid='')
+            await state.set_state(Input.url)
+            await ui.show('أرسل رابط wss أو /skip للرابط الافتراضي. /cancel للإلغاء',view='accounts')
+        except (ValueError,KeyError):await ui.show('أعد إضافة بيانات الجلسة من إدارة الحسابات.',accounts_kb(repo.doc),view='accounts')
 
     @dp.message(Input.url)
-    async def url(msg: Message, state: FSMContext):
-        data = await state.get_data()
+    async def url(msg: Message,state: FSMContext):
+        data=await state.get_data()
+        with suppress(Exception):await msg.delete()
         try:
-            mode = data['mode']
-            key = 'real_account' if mode == 'REAL' else 'demo_account'
-            value = (config.REAL_URL if mode == 'REAL' else config.DEMO_URL) if msg.text == '/skip' else valid_url(msg.text)
-            text = await worker.change({key+'.ssid': data['frame'], key+'.ws_url': value},
-                                       reconnect=repo.doc['account_mode'] == mode)
+            mode=data['mode']
+            value=(config.REAL_URL if mode=='REAL' else config.DEMO_URL) if msg.text=='/skip' else valid_url(msg.text)
+            await state.update_data(ws_url=value)
+            await state.set_state(Input.account_name)
+            await ui.show('أرسل اسماً مختصراً للحساب أو /skip لعرض UID والنوع فقط. /cancel للإلغاء',view='accounts')
+        except (ValueError,KeyError):await ui.show('رابط غير صالح؛ أرسل رابط wss الخاص بالمنصة أو /skip.',view='accounts')
+
+    @dp.message(Input.account_name)
+    async def account_name(msg: Message,state: FSMContext):
+        data=await state.get_data()
+        try:
+            name='' if msg.text=='/skip' else safe_name(msg.text)
+            credentials=dict(ssid=data['frame'],ws_url=data['ws_url'])
+            key=await worker.add_account(credentials,data['mode'],name)
             await state.clear()
-            await ui.show(text + '\n' + account_text(repo.doc, worker.po), accounts_kb(), view='accounts')
-        except ValueError as e:
-            await ui.show(str(e), view='accounts')
-        except Exception as e:
+            await ui.show('✅ تم حفظ الحساب: '+account_label(repo.doc['accounts'][key])+'\nلم يبدأ التداول ولم يُبدّل الحساب النشط تلقائياً.',account_list_kb(repo.doc),view='accounts')
+        except ValueError as exc:await ui.show(str(exc),accounts_kb(repo.doc),view='accounts')
+        except Exception:
             await state.clear()
-            await ui.show('لم يُؤكّد حفظ البيانات؛ حاول مجدداً. نوع الخطأ: '+type(e).__name__, accounts_kb(), view='accounts')
+            await ui.show('تعذّر تأكيد حفظ الحساب؛ أعد فتح القائمة للتحقق.',accounts_kb(repo.doc),view='accounts')
 
     @dp.message(Input.limit)
     async def limit_input(msg: Message, state: FSMContext):

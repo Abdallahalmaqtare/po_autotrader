@@ -78,7 +78,7 @@ async def main():
     runner = web.AppRunner(health_application(state), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', config.PORT).start()
-    print('[APP] build=v20-payout-cycle-fix', flush=True)
+    print('[APP] build=v22-websocket-pause-account-tools', flush=True)
     print(f'[APP] health server bound port={config.PORT}; starting dependencies', flush=True)
     repo = None
     worker = None

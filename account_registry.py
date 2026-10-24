@@ -6,12 +6,6 @@ from copy import deepcopy
 import re
 
 
-class DuplicateAccount(ValueError):
-    def __init__(self,key):
-        self.key=key
-        super().__init__("هذا الحساب موجود من قبل؛ افتح بطاقته للتعديل بدلاً من إضافته مجدداً")
-
-
 def account_key(uid,mode):return f'{mode}_{uid}'
 
 
@@ -52,6 +46,7 @@ def migrate(doc):
         uid=credential_uid(credentials,mode)
         if not uid:continue
         key=account_key(uid,mode)
+        if key in records and records[key].get('deleted'):continue
         if key not in records:
             record=make_record(credentials,mode)
             record['stats']=deepcopy(doc['account_stats'][mode])
@@ -76,12 +71,13 @@ def bank_active(doc):
         record['martingale_step']=doc['runtime'].get('martingale_step',0)
         record['sizing_signature']=deepcopy(doc['runtime'].get('sizing_signature'))
         record['cycle']=deepcopy(doc['runtime']['cycle'])
+        record['manual_pause']=deepcopy(doc['runtime'].get('manual_pause',{}))
         record['sequence_loss_amount']=doc['runtime'].get('sequence_loss_amount',0.0)
 
 
 def select_document(doc,key):
     new=deepcopy(doc);bank_active(new)
-    if key not in new.get('accounts',{}):raise ValueError('الحساب غير موجود؛ حدّث القائمة')
+    if key not in new.get('accounts',{}) or new['accounts'][key].get('deleted'):raise ValueError('الحساب غير موجود؛ حدّث القائمة')
     record=new['accounts'][key];mode=record['mode']
     new['account_mode']=mode;new['active_account_id']=key;new['active_accounts'][mode]=key
     new[credential_key(mode)]=deepcopy(record['credentials'])
@@ -90,6 +86,8 @@ def select_document(doc,key):
     new['runtime']['martingale_step']=record['martingale_step']
     new['runtime']['sizing_signature']=deepcopy(record['sizing_signature'])
     new['runtime']['cycle']=deepcopy(record['cycle'])
+    from manual_pause import pause_defaults
+    new['runtime']['manual_pause']=deepcopy(record.get('manual_pause') or pause_defaults())
     return new
 
 
@@ -100,4 +98,4 @@ def account_label(record,active=False):
 
 def registry_text(doc,po=None):
     from account_details import account_text
-    return '👤 إدارة الحسابات\n'+account_text(doc,po)+f"\nالحسابات المحفوظة: {len(doc.get('accounts',{}))}\nاختر حساباً من القائمة أو أضف حساباً جديداً."
+    return '👤 إدارة الحسابات\n'+account_text(doc,po)+f"\nالحسابات المحفوظة: {sum(not record.get('deleted') for record in doc.get('accounts',{}).values())}\nاختر حساباً من القائمة أو أضف حساباً جديداً."

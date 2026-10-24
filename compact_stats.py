@@ -14,17 +14,23 @@ def compact_report(repo, worker):
     balance = f'${worker.balance:,.2f}' if worker.balance is not None else '—'
     risk = risk_state(d)
     limits = 'تقليدي' if risk['mode'] == 'TRADITIONAL' else f"ربح ${risk['profit_limit']:g} / خسارة ${risk['loss_limit']:g}"
+    payout='—'
+    if callable(getattr(worker,'payout_book',None)):
+        book=worker.payout_book()
+        value=book.rate(t['asset'],t['duration_seconds'],d['payout']['max_age_seconds']) if book else None
+        if value is not None:payout=f'{value:g}%'
+    status=worker.pause_text() if callable(getattr(worker,'pause_text',None)) else ('🟢 يعمل' if worker.running else '🔴 متوقف')
     lines = ['📊 إحصائيات التداول',
-             f"{'🟢 يعمل' if worker.running else '🔴 متوقف'} | {d['account_mode']} | UID: {identity['uid'] or '—'}",
+             f"{status} | {d['account_mode']} | UID: {identity['uid'] or '—'}",
              f"💱 {t['asset']} | ⏱ {t['duration_seconds']}ث | أساس ${t['trade_amount']:g}",
              '━━━━━━━━━━━━━━━━',
              f"الصفقات: {s['total_trades']:,} | النجاح: {rate:.1f}%",
              f"رابحة: {s['won_trades']:,} | خاسرة: {s['lost_trades']:,} | تعادل: {s['draws']:,}",
              f"سلاسل مستنفدة: {s['sequence_losses']:,} | خسارتها: ${s['lost_amount']:,.2f}",
              '━━━━━━━━━━━━━━━━',
+             f'📈 عائد الزوج الحالي: {payout}',
              f"مبالغ الدخول: ${s['total_staked']:,.2f}",
-             f"العوائد المستلمة: ${s['total_returned']:,.2f}",
-             f"صافي الربح / الخسارة: ${s['net_pnl']:+,.2f}",
+             f"💰 صافي الربح / الخسارة: ${s['net_pnl']:+,.2f}",
              f'الرصيد: {balance}',
              short_summary(d), f'🛡 الحدود: {limits}']
     notes = []

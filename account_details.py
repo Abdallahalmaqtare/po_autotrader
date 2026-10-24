@@ -38,7 +38,9 @@ def account_identity(doc, po=None):
 def account_text(doc, po=None):
     info = account_identity(doc, po)
     label = 'حقيقي REAL' if info['mode'] == 'REAL' else 'تجريبي DEMO / PRACTICE'
-    return (f"👤 الحساب: {label}\n"
-            f"معرّف حساب المنصة UID: {info['uid'] or 'غير متاح'}\n"
-            f"مصدر المعرّف: {info['source']}\n"
-            'قد يكون UID نفسه للحقيقي والديمو إذا كانا تابعين لنفس المستخدم؛ نوع الحساب هو الفاصل.\n')
+    record=doc.get('accounts',{}).get(doc.get('active_account_id'),{})
+    name=record.get('name')
+    return (f"👤 الحساب النشط: {label}\n"
+            f"UID: {info['uid'] or 'غير متاح'}\n"
+            +(f"الاسم: {name}\n" if name else '')+
+            f"الاتصال: {'متصل' if info['connected'] else 'غير متصل'}\n")

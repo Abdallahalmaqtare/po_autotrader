@@ -10,6 +10,7 @@ from risk_limits import risk_defaults, validate_risk
 from recovery import recovery_defaults, state_defaults, validate_recovery
 from payout_guard import payout_defaults, validate_payout
 from work_cycle import cycle_defaults, cycle_state, validate_cycle
+from manual_pause import pause_defaults
 
 MODES = ('PRACTICE', 'REAL')
 DURATIONS = (5, 15, 30, 60, 180, 300, 600, 900, 1800)
@@ -90,9 +91,12 @@ def defaults():
         'recovery': recovery_defaults(),
         'payout': payout_defaults(),
         'schedule': cycle_defaults(),
+        'signal_bot_username': config.SIGNAL_BOT_USERNAME,
+        'accounts': {}, 'active_accounts': {'PRACTICE':None,'REAL':None},
+        'active_account_id': None, 'trade_ledger': [],
         'session_stats': empty_stats(),
         'account_stats': {m: empty_stats() for m in MODES},
-        'runtime': {'pending': None, 'martingale_step': 0, 'cycle': cycle_state(),
+        'runtime': {'manual_pause':pause_defaults(), 'pending': None, 'martingale_step': 0, 'cycle': cycle_state(),
                     'recovery': {m: state_defaults() for m in MODES}},
     }
 
@@ -103,6 +107,8 @@ def validate_document(doc):
     validate_risk(doc.get('risk', risk_defaults()))
     validate_payout(doc.get('payout', payout_defaults()))
     validate_cycle(doc.get('schedule', cycle_defaults()))
+    from telegram_bootstrap import signal_username
+    if doc.get('signal_bot_username'):signal_username(doc['signal_bot_username'])
     t = doc['trading']
     if t.get('asset') not in STORED_ASSET_NAMES:
         raise ValueError('يُسمح بأزواج فوركس OTC الموجودة في القائمة فقط')
@@ -124,7 +130,7 @@ def patched(doc, fields):
     d = deepcopy(doc)
     if 'trading.asset' in fields and fields['trading.asset'] not in SYMBOL_NAMES:
         raise ValueError('اختر زوجاً من الصفحات الخمس المطابقة لبوت الإشارات')
-    allowed = {'account_mode'} | {'schedule.' + k for k in cycle_defaults()} | {'payout.' + k for k in payout_defaults()} | {'recovery.' + k for k in recovery_defaults()} | {'risk.' + k for k in risk_defaults()} | {'trading.' + k for k in defaults()['trading']} | {
+    allowed = {'account_mode','signal_bot_username'} | {'schedule.' + k for k in cycle_defaults()} | {'payout.' + k for k in payout_defaults()} | {'recovery.' + k for k in recovery_defaults()} | {'risk.' + k for k in risk_defaults()} | {'trading.' + k for k in defaults()['trading']} | {
         f'{kind}_account.{key}' for kind in ('real', 'demo') for key in ('ssid', 'ws_url', 'uid')}
     for path, value in fields.items():
         if path not in allowed:
