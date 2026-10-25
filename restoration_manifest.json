@@ -1,0 +1,16 @@
+{
+  "build": "v24-v20-results-account-controls",
+  "live_result_engine": "v20-original",
+  "method_identity_verified": true,
+  "v20_v23_run_identical_except_build": true,
+  "v20_files_sha256": {
+    "pocket_option.py": "2b8678e81bb48d23ba82fc575d550653bb364f86bcf952564e8ab16e7eb63073",
+    "martingale.py": "3bec3b0fc32ec081c6761cefc7e36aec8defe02b0f252826af44652c1e2e44eb",
+    "telegram_signal.py": "3d478052a70c153def998ab38eb7497050794bce6dfa1b51eb6319df0742d9f2",
+    "logger.py": "cee9bcf05229308aecdf0628c9cf4d52d088ab650e70bcd7d06a5fb91ae4a8e9"
+  },
+  "hosting_ping_is_best_effort": true,
+  "live_account_tested": false,
+  "source_v20_zip_sha256": "5562f998ed33bb9f7fefe452dee0d0ed966a2b2aca20a0bf485cc07194b52796",
+  "source_v23_zip_sha256": "1215a02d42e3ade29893bd0a34871551ac4458aace5f622cd4d359dc20bc6701"
+}

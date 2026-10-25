@@ -96,7 +96,7 @@ def defaults():
         'active_account_id': None, 'trade_ledger': [],
         'session_stats': empty_stats(),
         'account_stats': {m: empty_stats() for m in MODES},
-        'runtime': {'manual_pause':pause_defaults(), 'pending': None, 'martingale_step': 0, 'cycle': cycle_state(),
+        'runtime': {'result_engine':'v20-original','manual_pause':pause_defaults(), 'pending': None, 'martingale_step': 0, 'cycle': cycle_state(),
                     'recovery': {m: state_defaults() for m in MODES}},
     }
 

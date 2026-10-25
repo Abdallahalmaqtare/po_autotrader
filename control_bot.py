@@ -55,11 +55,12 @@ def kb(rows):
 
 
 def home(worker=None):
-    primary=('⏸ إيقاف مؤقت','pause')
+    # Three columns. Telegram determines physical width; short centre labels
+    # communicate its secondary role, while start/stop remain on either edge.
+    centre=('⏸ مؤقت','pause')
     if worker and (worker.pause_requested or worker.repo.doc['runtime'].get('manual_pause',{}).get('requested')):
-        primary=('⏳ انتظار النتيجة','pause') if worker.pending or worker.in_flight else ('▶️ استمرار','resume')
-    elif not worker or not worker.running:primary=('▶️ تشغيل جديد','start')
-    return kb([[primary,('⏹ إيقاف التشغيل','stop')],
+        centre=('⏳ انتظار','pause') if worker.pending or worker.in_flight else ('▶ استمرار','resume')
+    return kb([[('▶️ تشغيل','start'),centre,('⏹ إيقاف','stop')],
                [('📊 الإحصائيات','stats'),('⚙️ الإعدادات','settings')],
                [('👤 إدارة الحسابات','accounts'),('🔄 الحالة','status')]])
 

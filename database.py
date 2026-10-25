@@ -229,7 +229,7 @@ class Repository:
                     broker_id=receipt.get('broker_id') if receipt else None,
                     account_id=order.get('account_id'),mode=mode,asset=order.get('asset'),amount=amount,
                     result=result or 'unconfirmed',net_pnl=float(delta) if delta is not None else None,
-                    source=receipt['source'] if receipt else 'unconfirmed_archive',
+                    source=receipt['source'] if receipt else ('v20_balance' if result in ('win','loss','draw') else 'unconfirmed_archive'),
                     archive_reason=order.get('archive_reason'),duration_seconds=order.get('duration_seconds'),
                     step=order.get('step'),seq_lost=seq_lost,seq_lost_amount=seq_lost_amount,evidence=deepcopy(receipt.get('evidence')) if receipt else None,
                     settled_at=utcnow()))
@@ -240,6 +240,14 @@ class Repository:
             r=await self.collection.update_one(q,{'$set':writes})
             if r.matched_count!=1:raise RuntimeError('result_already_saved_or_lease_lost')
             self.doc=new
+
+    async def restore_v20_engine(self):
+        async with self.lock:
+            writes={'runtime.result_engine':'v20-original','runtime.correction_required':False,
+                    'runtime.unconfirmed_streak':0}
+            r=await self.collection.update_one(self.fence(),{'$set':writes})
+            if r.matched_count!=1:raise RuntimeError('lease_lost')
+            self.doc['runtime'].update(result_engine='v20-original',correction_required=False,unconfirmed_streak=0)
 
     async def archive_pending(self,reason,next_step=None):
         pending=deepcopy(self.doc['runtime'].get('pending'))
