@@ -49,6 +49,12 @@ def text_chunks(text, max_units=3900):
 
 def card_for(action, text=''):
     action = action or 'home'
+    if action=='pause':return 'stop'
+    if action=='resume':return 'start'
+    if action=='ws_diagnose':return 'diagnostic'
+    if action.startswith('signal_source'):return 'settings'
+    if action.startswith('account:') or action=='settle_review':
+        return 'accounts'
     if action.startswith('cycle'):
         return 'setup'
     if action.startswith('payout'):

@@ -54,7 +54,7 @@ class ManualPause:
             elif not self.in_flight and self.stage!='order_reserve':
                 with suppress(asyncio.CancelledError):await self.task
             if self.pending or self.in_flight:
-                return '⏳ طلب الإيقاف المؤقت محفوظ. جاري انتظار نتيجة الصفقة المعلّقة؛ لن يُرسل دخول جديد.'
+                return '⏳ طلب الإيقاف المؤقت محفوظ. جاري انتظار إغلاق الصفقة وتسوية نتيجتها؛ لن يُرسل دخول جديد.'
             return '⏸ تم الإيقاف مؤقتاً وحفظ المستوى والتعزيز والإحصائيات. يمكنك تعديل الزوج ثم الضغط على استمرار.'
 
     async def resume(self):

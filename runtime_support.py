@@ -16,6 +16,9 @@ POLL_BACKOFF = BackoffConfig(min_delay=1.0, max_delay=15.0, factor=1.5, jitter=0
 
 def timestamp_print(*args, **kwargs):
     prefix=datetime.now(TZ).strftime('[%H:%M:%S.%f]')[:-4]+']'
+    from tenant_scope import current
+    scope=current()
+    if scope:prefix+=f'[user={scope.uid}]'
     builtins.print(prefix,*args,**kwargs)
 
 

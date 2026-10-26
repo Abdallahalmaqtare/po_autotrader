@@ -14,6 +14,8 @@ from database import Repository
 from worker import TradingWorker
 from control_bot import build_dispatcher
 from runtime_support import telegram_startup, poll_controller
+from hosting_health import public_health_url,heartbeat_interval,keep_alive_loop
+from user_service import UserService,gateway_dispatcher
 
 
 def health_application(state):
@@ -26,7 +28,8 @@ def health_application(state):
         # Liveness endpoint deliberately permits a standby during rolling deploy:
         # new instance must pass health before Render stops the old lease owner.
         status = 503 if state.get('phase') == 'stopping' else 200
-        return web.json_response({'alive': status == 200}, status=status)
+        return web.json_response({'alive': status == 200,'phase':state.get('phase'),
+                                  'keepalive':state.get('keepalive',{'enabled':False})}, status=status)
 
     async def ready(request):
         ready = state.get('ready', False)
@@ -38,26 +41,20 @@ def health_application(state):
     return app
 
 
-async def keep_alive(public_url, shutdown):
-    """Best-effort self-ping /health while this process is alive. It cannot
-    wake itself after platform suspension or guarantee continuous availability. Interval via KEEP_ALIVE_SECONDS (default 600s, safely
-    under Render's 15-minute idle limit). Best-effort aid; paid plan is the guarantee."""
-    try:
-        interval = max(60.0, float(os.getenv('KEEP_ALIVE_SECONDS', '600') or 600))
-    except ValueError:
-        interval = 600.0
-    import aiohttp
-    async with aiohttp.ClientSession() as session:
-        while not shutdown.is_set():
-            await wait_or_shutdown(shutdown, interval)
-            if shutdown.is_set():
-                break
-            try:
-                async with session.get(public_url + '/health',
-                                       timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    print('[APP] keep-alive ping ->', resp.status, flush=True)
-            except Exception as e:
-                print('[APP] keep-alive failed:', type(e).__name__, flush=True)
+async def keep_alive(public_url,shutdown,metrics=None):
+    """Compatibility entry point with supervision independent of the trader."""
+    metrics=metrics if metrics is not None else {}
+    url=public_health_url({'RENDER_EXTERNAL_URL':public_url})
+    if not url:
+        metrics.update(enabled=False,last_error='public_url_missing');return
+    while not shutdown.is_set():
+        try:
+            await keep_alive_loop(url,shutdown,metrics,interval=heartbeat_interval(os.environ))
+        except asyncio.CancelledError:raise
+        except Exception as exc:
+            metrics.update(last_error=type(exc).__name__)
+            print('[HOST] health worker restart:',type(exc).__name__,flush=True)
+            await wait_or_shutdown(shutdown,30)
 
 
 async def wait_or_shutdown(event, seconds):
@@ -78,16 +75,31 @@ async def main():
     runner = web.AppRunner(health_application(state), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', config.PORT).start()
-    print('[APP] build=v20-payout-cycle-fix', flush=True)
+    print('[APP] build=v25-long-trades-favorites-users', flush=True)
+    print('[APP] result_engine=v20-short-long-aware; isolated user workers',flush=True)
     print(f'[APP] health server bound port={config.PORT}; starting dependencies', flush=True)
     repo = None
     worker = None
     bot = None
     polling = None
     heartbeat = None
+    service=None
+    users_guardian=None
     stop_waiter = None
     keepalive = None
+    metrics=state.setdefault('keepalive',{'enabled':False})
     try:
+        try:health_url=public_health_url(os.environ)
+        except ValueError:
+            health_url=None;metrics.update(enabled=False,last_error='invalid_public_url')
+            print('[HOST] invalid public URL; health worker disabled, trading service unaffected',flush=True)
+        if health_url:
+            # Start as soon as the public health port is bound, not after DB/TG.
+            keepalive=asyncio.create_task(keep_alive(health_url[:-len('/health')],shutdown,metrics))
+            print('[HOST] public health worker enabled; first ping immediate',flush=True)
+        else:
+            metrics.update(enabled=False,last_error=metrics.get('last_error') or 'public_url_missing')
+            print('[HOST] no public URL; set RENDER_EXTERNAL_URL or APP_PUBLIC_URL',flush=True)
         config.validate_startup()
         repo = Repository(config.MONGO_URI, config.DB_NAME)
         # DB first-load retry is bounded per operation, cancellable during shutdown.
@@ -119,9 +131,11 @@ async def main():
                 except Exception:
                     pass
 
-        worker = TradingWorker(repo)
         bot = Bot(token=config.CONTROL_BOT_TOKEN)
-        dp = build_dispatcher(repo, worker, bot)
+        db=repo.client[config.DB_NAME]
+        service=UserService(repo,bot,config.ADMIN_TELEGRAM_ID,db['bot_users'],repo.collection,db['resource_claims'],shutdown)
+        dp=gateway_dispatcher(service)
+        users_guardian=asyncio.create_task(service.supervise())
 
         async def heartbeat_loop():
             while not shutdown.is_set():
@@ -133,7 +147,7 @@ async def main():
                 except Exception:
                     repo.leader = False
                     state['ready'] = False
-                    worker.request_stop()
+                    for rt in list(service.runtimes.values()):rt.worker.request_stop()
                     print('[APP] database lease unavailable; disabling entries and shutting down', flush=True)
                     shutdown.set()
                     break
@@ -145,10 +159,6 @@ async def main():
         if shutdown.is_set():return
         polling = asyncio.create_task(poll_controller(dp,bot,shutdown))
         stop_waiter = asyncio.create_task(shutdown.wait())
-        ka_url = os.getenv('RENDER_EXTERNAL_URL', '').strip().rstrip('/')
-        if ka_url:
-            keepalive = asyncio.create_task(keep_alive(ka_url, shutdown))
-            print('[APP] keep-alive enabled for', ka_url, flush=True)
         state.update(phase='ready', ready=True)
         print('[APP] controller ready; trading remains OFF until administrator presses Start', flush=True)
         done, _ = await asyncio.wait([polling, stop_waiter], return_when=asyncio.FIRST_COMPLETED)
@@ -156,7 +166,7 @@ async def main():
             # Re-raise so Render sees an unsuccessful exit, without raw exception text.
             error = polling.exception()
             print('[APP] polling ended:', type(error).__name__ if error else 'completed', flush=True)
-            worker.request_stop()
+            for rt in list(service.runtimes.values()):rt.worker.request_stop()
             raise RuntimeError('Controller polling ended unexpectedly') from None
     except Exception as e:
         print('[APP] startup failed:', type(e).__name__, flush=True)
@@ -167,9 +177,9 @@ async def main():
     finally:
         state.update(phase='stopping', ready=False)
         shutdown.set()
-        if worker:
-            await worker.close()
-        for task in (polling, heartbeat, stop_waiter, keepalive):
+        if service:await service.close()
+        elif worker:await worker.close()
+        for task in (polling, heartbeat, stop_waiter, keepalive,users_guardian):
             if task is not None and not task.done():
                 task.cancel()
             if task:

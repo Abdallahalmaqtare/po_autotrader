@@ -48,6 +48,8 @@ SHUTDOWN_GRACE_SECONDS = number('SHUTDOWN_GRACE_SECONDS', 20)
 # Compatibility only. Cloud account credentials come from MongoDB, never this value.
 PO_SSID = ''
 PO_WS_URL = DEMO_URL
+# websockets 15 may choose a proxy automatically; require explicit opt-in.
+PO_USE_SYSTEM_PROXY = os.getenv('PO_USE_SYSTEM_PROXY','false').lower() in ('1','true','yes')
 
 
 def validate_startup():
@@ -65,10 +67,16 @@ def validate_startup():
     import math
     for key, value in [('SIGNAL_TIMEOUT_SECONDS', SIGNAL_TIMEOUT_SECONDS),
                        ('CONNECT_TIMEOUT_SECONDS', CONNECT_TIMEOUT_SECONDS),
-                       ('SHUTDOWN_GRACE_SECONDS', SHUTDOWN_GRACE_SECONDS)]:
+                       ('SHUTDOWN_GRACE_SECONDS', SHUTDOWN_GRACE_SECONDS),('LONG_RESULT_GRACE_SECONDS',LONG_RESULT_GRACE_SECONDS)]:
         if not math.isfinite(value) or value <= 0:
             raise ValueError('Invalid positive timeout: ' + key)
     if not 1 <= PORT <= 65535:
         raise ValueError('Invalid PORT')
     if not MONGO_URI.startswith(('mongodb://', 'mongodb+srv://')):
         raise ValueError('Invalid MONGO_URI scheme')
+
+LONG_RESULT_GRACE_SECONDS=number("LONG_RESULT_GRACE_SECONDS",45)
+TELEGRAM_EXPECTED_USER_ID=0
+from tenant_scope import install as _install_scope
+import sys as _sys
+_install_scope(_sys.modules[__name__])

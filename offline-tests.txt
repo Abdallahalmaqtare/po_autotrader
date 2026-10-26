@@ -1,0 +1,398 @@
+...[14:33:08.379] [WORKER] paused; code=PO_CREDENTIALS_INVALID; stage=pocket_credentials; type=ValueError; at=cloud_settings.py:44
+.[14:33:08.380] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+....[14:33:08.389] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:09.972] [PAYOUT] parsed assets=69; account=PRACTICE
+[14:33:09.972] [WS] failed phase=authentication code=PO_AUTH_REJECTED error=SafeIssue
+[14:33:10.174] [WORKER] paused; code=PO_AUTH_REJECTED; stage=pocket_connect; type=SafeIssue; at=cloud_transport.py:168
+..[14:33:10.180] [WORKER] paused; code=SIGNAL_BOT_UNRESOLVED; stage=signal_bot_resolve; type=ValueError; at=-
+.[14:33:10.180] [PO] Balance received (PRACTICE): 100.0
+[14:33:10.181] [PO] Balance received (REAL): 50.0
+...........[14:33:10.182] [MM] LOSS -> next signal will DOUBLE to 2$ (DOUBLE #1/4)
+[14:33:10.182] [MM] LOSS -> next signal will DOUBLE to 4$ (DOUBLE #2/4)
+[14:33:10.182] [MM] DRAW -> next signal uses the SAME amount 4$ (DOUBLE #2/4)
+[14:33:10.182] [MM] WIN at double #2 -> sequence WON, back to base 1$
+.[14:33:10.187] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+.[14:33:10.191] [WORKER] send/result error (TimeoutError) - continuing
+[14:33:10.191] [WORKER] UNCONFIRMED -> amount kept at current step; auto-reconnecting and continuing without review
+..[14:33:10.200] [MM] WIN at base -> stay on 1.0$
+......[14:33:10.203] [PO] Balance received (PRACTICE): 123.0
+[14:33:10.203] [PO] balance frame arrived for the OTHER account type - stored SSID does not match the selected account mode
+...............[14:33:10.212] [TG] Signal bot resolved: @AboodTradingOTCbot
+[14:33:10.212] [TG] SIGNAL RECEIVED -> Direction: UP | Bot asset: ? | Accuracy: ignored (ignored as configured)
+[14:33:10.212] [TG] SIGNAL RECEIVED -> Direction: UP | Bot asset: ? | Accuracy: ignored (ignored as configured)
+[14:33:10.212] [TG] SIGNAL RECEIVED -> Direction: DOWN | Bot asset: ? | Accuracy: ignored (ignored as configured)
+.....[14:33:10.242] [MM] LOSS -> next signal will DOUBLE to 20.0$ (DOUBLE #1/4)
+[14:33:10.244] [MM] DRAW -> next signal uses the SAME amount 20.0$ (DOUBLE #1/4)
+[14:33:10.246] [MM] WIN at double #1 -> sequence WON, back to base 10.0$
+[14:33:10.249] [MM] WIN at base -> stay on 10.0$
+.[14:33:10.252] [RISK] LOSS_LIMIT account=PRACTICE net=-60.000000; new entries disabled
+..[14:33:10.261] [MM] LOSS -> next signal will DOUBLE to 20.0$ (DOUBLE #1/4)
+[14:33:10.263] [MM] LOSS -> next signal will DOUBLE to 40.0$ (DOUBLE #2/4)
+[14:33:10.266] [MM] LOSS -> next signal will DOUBLE to 80.0$ (DOUBLE #3/4)
+[14:33:10.266] [RISK] LOSS_LIMIT account=PRACTICE net=-70.000000; new entries disabled
+.[14:33:10.273] [RISK] PROFIT_LIMIT account=PRACTICE net=40.000000; new entries disabled
+.[14:33:10.280] [MM] WIN at base -> stay on 10.0$
+[14:33:10.281] [RISK] PROFIT_LIMIT account=PRACTICE net=50.000000; new entries disabled
+.[14:33:10.285] [RISK] PROFIT_LIMIT account=PRACTICE net=40.000000; new entries disabled
+.[14:33:10.290] [RISK] PROFIT_LIMIT account=PRACTICE net=50.000000; new entries disabled
+.[14:33:10.297] [MM] LOSS -> next signal will DOUBLE to 20.0$ (DOUBLE #1/4)
+[14:33:10.299] [MM] LOSS -> next signal will DOUBLE to 40.0$ (DOUBLE #2/4)
+[14:33:10.301] [MM] LOSS -> next signal will DOUBLE to 80.0$ (DOUBLE #3/4)
+[14:33:10.303] [MM] WIN at double #3 -> sequence WON, back to base 10.0$
+.[14:33:10.309] [WORKER] UNCONFIRMED -> amount kept at current step; auto-reconnecting and continuing without review
+[14:33:10.311] [MM] WIN at base -> stay on 10.0$
+..........[14:33:10.332] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.333] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.334] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.336] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.337] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.338] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.339] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.341] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.342] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.343] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.344] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.346] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.347] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.349] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.350] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.351] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.352] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.354] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.355] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.356] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.358] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.359] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.361] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.362] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.363] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.365] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.366] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.367] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.368] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+[14:33:10.370] [WORKER] paused; code=TG_SESSION_INVALID; stage=telegram_session_parse; type=SafeIssue; at=telegram_bootstrap.py:20
+.........[14:33:10.407] [UI] photo panel unavailable (TelegramNetworkError); using text
+...[14:33:10.415] [UI] photo panel unavailable (FileNotFoundError); using text
+.........................[14:33:10.482] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.484] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.487] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.489] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.489] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.492] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #1/4)
+[14:33:10.497] [MM] WIN at double #1 -> sequence WON, back to base 2.0$
+[14:33:10.500] [MM] WIN at base -> stay on 2.0$
+[14:33:10.502] [MM] WIN at base -> stay on 2.0$
+[14:33:10.506] [MM] WIN at base -> stay on 1.0$
+.[14:33:10.512] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.514] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.517] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.519] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.519] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+.[14:33:10.526] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.529] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.531] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.533] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.533] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.535] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #1/4)
+[14:33:10.538] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #2/4)
+[14:33:10.541] [MM] LOSS -> next signal will DOUBLE to 16.0$ (DOUBLE #3/4)
+[14:33:10.543] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 2.0$
+[14:33:10.543] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $30
+[14:33:10.545] [MM] WIN at base -> stay on 2.0$
+.[14:33:10.552] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.554] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.556] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.558] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.558] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.561] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #1/4)
+[14:33:10.563] [MM] DRAW -> next signal uses the SAME amount 4.0$ (DOUBLE #1/4)
+[14:33:10.566] [MM] WIN at double #1 -> sequence WON, back to base 2.0$
+..[14:33:10.575] [MM] LOSS -> next signal will DOUBLE to 6.0$ (DOUBLE #1/4)
+[14:33:10.578] [MM] LOSS -> next signal will DOUBLE to 12.0$ (DOUBLE #2/4)
+[14:33:10.580] [MM] LOSS -> next signal will DOUBLE to 24.0$ (DOUBLE #3/4)
+[14:33:10.582] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 3.0$
+[14:33:10.582] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $45
+[14:33:10.584] [MM] WIN at base -> stay on 5.0$
+.[14:33:10.591] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.593] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.595] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.597] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.597] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+.[14:33:10.604] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.606] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.608] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.611] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.611] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.613] [MM] WIN at base -> stay on 2.0$
+.[14:33:10.620] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.622] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.625] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.627] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.627] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.629] [MM] WIN at base -> stay on 2.0$
+.[14:33:10.637] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.639] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.641] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.643] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.643] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+.[14:33:10.651] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.653] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.655] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.660] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.660] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.663] [MM] WIN at base -> stay on 2.0$
+.[14:33:10.669] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.671] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.674] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.676] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.676] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.677] [RISK] LOSS_LIMIT account=PRACTICE net=-15.000000; new entries disabled
+.[14:33:10.684] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.686] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.688] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.690] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.690] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+.[14:33:10.698] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.700] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.702] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.704] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.704] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.707] [MM] WIN at base -> stay on 1.0$
+.[14:33:10.713] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.715] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.718] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.720] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.720] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.722] [WORKER] UNCONFIRMED -> amount kept at current step; auto-reconnecting and continuing without review
+[14:33:10.724] [MM] WIN at base -> stay on 2.0$
+..[14:33:10.732] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.734] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.737] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.739] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.739] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.741] [MM] WIN at base -> stay on 2.0$
+[14:33:10.744] [MM] WIN at base -> stay on 2.0$
+[14:33:10.747] [MM] WIN at base -> stay on 2.0$
+[14:33:10.749] [MM] WIN at base -> stay on 2.0$
+[14:33:10.751] [MM] WIN at base -> stay on 2.0$
+[14:33:10.754] [MM] WIN at base -> stay on 2.0$
+[14:33:10.756] [MM] WIN at base -> stay on 2.0$
+[14:33:10.759] [MM] WIN at base -> stay on 2.0$
+[14:33:10.761] [MM] WIN at base -> stay on 2.0$
+[14:33:10.764] [MM] WIN at base -> stay on 1.0$
+.[14:33:10.770] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.773] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.775] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:10.777] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:10.777] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:10.779] [MM] WIN at base -> stay on 2.0$
+[14:33:10.782] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #1/4)
+[14:33:10.784] [MM] DRAW -> next signal uses the SAME amount 4.0$ (DOUBLE #1/4)
+[14:33:10.786] [MM] WIN at double #1 -> sequence WON, back to base 2.0$
+[14:33:10.789] [MM] WIN at base -> stay on 2.0$
+[14:33:10.791] [MM] WIN at base -> stay on 1.0$
+..[META] synchronized EURUSD_otc 5s; first_signal=True
+[META] synchronized GBPUSD_otc 15s; first_signal=True
+.[META] synchronized EURUSD_otc 5s; first_signal=True
+[14:33:10.803] [TG] Drained 1 stale signal(s) from previous cycle
+[META] synchronized EURUSD_otc 5s; first_signal=False
+.[META] synchronized USDINR_otc 5s; first_signal=True
+[META] synchronized EURUSD_otc 5s; first_signal=True
+.[META] synchronized EURUSD_otc 5s; first_signal=True
+.[META] synchronized EURUSD_otc 5s; first_signal=True
+...[META] synchronized EURUSD_otc 5s; first_signal=True
+.............[META] synchronized EURUSD_otc 5s; first_signal=True
+[14:33:10.846] [PAYOUT] trading stopped: العائد 70% ≤ 84%
+.[META] synchronized EURUSD_otc 5s; first_signal=True
+[14:33:10.854] [MM] WIN at base -> stay on 1.0$
+.[META] synchronized EURUSD_otc 5s; first_signal=True
+[14:33:10.863] [MM] WIN at base -> stay on 1.0$
+[14:33:10.865] [MM] WIN at base -> stay on 1.0$
+..[META] synchronized GBPUSD_otc 5s; first_signal=True
+[14:33:10.878] [MM] WIN at base -> stay on 1.0$
+.[META] synchronized GBPUSD_otc 15s; first_signal=True
+...[META] synchronized EURUSD_otc 5s; first_signal=True
+[14:33:10.901] [MM] WIN at base -> stay on 1.0$
+.[META] synchronized EURUSD_otc 5s; first_signal=True
+[14:33:10.909] [PAYOUT] trading stopped: العائد 70% ≤ 84%
+.[META] synchronized EURUSD_otc 5s; first_signal=True
+.[14:33:10.919] [META] catalog scan pending: META_PAGE_LIMIT
+.[META] synchronized GBPUSD_otc 5s; first_signal=True
+[14:33:10.926] [PAYOUT] تم التحويل إلى GBPUSD_otc بعائد 92%
+[14:33:10.930] [MM] WIN at base -> stay on 1.0$
+.[14:33:10.934] [PAYOUT] trading stopped: العائد 84% ≤ 84%
+.....................[14:33:10.949] [TG] test: TimeoutError; retry=1; wait=1s
+.[14:33:10.951] [TG] test: TelegramNetworkError; retry=1; wait=1s
+[14:33:10.951] [TG] test: TimeoutError; retry=2; wait=2s
+..[14:33:10.966] [MM] WIN at base -> stay on 1.0$
+[14:33:10.966] [CYCLE] rest started
+.[14:33:10.973] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.975] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:10.976] [RISK] LOSS_LIMIT account=PRACTICE net=-3.000000; new entries disabled
+.[14:33:10.982] [MM] WIN at base -> stay on 1.0$
+[14:33:10.982] [CYCLE] time limit reached; entries disabled
+.[14:33:10.988] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:10.989] [CYCLE] rest started
+[14:33:11.019] [MM] WIN at double #1 -> sequence WON, back to base 1.0$
+.[14:33:11.025] [MM] WIN at base -> stay on 1.0$
+[14:33:11.026] [RISK] PROFIT_LIMIT account=PRACTICE net=200.000000; new entries disabled
+.[14:33:11.033] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:11.035] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:11.037] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:11.040] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:11.040] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+[14:33:11.040] [CYCLE] rest started
+[14:33:11.070] [MM] WIN at base -> stay on 1.0$
+..............................[14:33:11.124] [PO] Balance received (PRACTICE): 999.0
+[14:33:11.124] [PO] ORDER SENT  -> EURUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391124 | balance_before=1000
+[14:33:11.124] [PO] BALANCE CHECK -> before=1000 | after=999.0 | delta=-1.000000
+[14:33:11.124] [PO] RESULT by v6 balance comparison + loss recheck -> LOSS
+[14:33:11.124] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:11.127] [PO] Balance received (PRACTICE): 999.0
+[14:33:11.127] [PO] ORDER SENT  -> EURUSD_otc | CALL | 2.0$ | 5s | sent in 0.1 ms | id=1014391126 | balance_before=999.0
+[14:33:11.127] [PO] BALANCE CHECK -> before=999.0 | after=999.0 | delta=+0.000000
+[14:33:11.127] [PO] RESULT by v6 balance comparison + loss recheck -> DRAW
+[14:33:11.127] [MM] DRAW -> next signal uses the SAME amount 2.0$ (DOUBLE #1/4)
+[14:33:11.129] [PO] Balance received (PRACTICE): 997.0
+[14:33:11.129] [PO] ORDER SENT  -> EURUSD_otc | CALL | 2.0$ | 5s | sent in 0.1 ms | id=1014391129 | balance_before=999.0
+[14:33:11.129] [PO] BALANCE CHECK -> before=999.0 | after=997.0 | delta=-2.000000
+[14:33:11.129] [PO] RESULT by v6 balance comparison + loss recheck -> LOSS
+[14:33:11.129] [MM] LOSS -> next signal will DOUBLE to 4.0$ (DOUBLE #2/4)
+[14:33:11.131] [PO] Balance received (PRACTICE): 993.0
+[14:33:11.131] [PO] ORDER SENT  -> EURUSD_otc | CALL | 4.0$ | 5s | sent in 0.1 ms | id=1014391131 | balance_before=997.0
+[14:33:11.131] [PO] BALANCE CHECK -> before=997.0 | after=993.0 | delta=-4.000000
+[14:33:11.131] [PO] RESULT by v6 balance comparison + loss recheck -> LOSS
+[14:33:11.131] [MM] LOSS -> next signal will DOUBLE to 8.0$ (DOUBLE #3/4)
+[14:33:11.133] [PO] Balance received (PRACTICE): 985.0
+[14:33:11.133] [PO] ORDER SENT  -> EURUSD_otc | CALL | 8.0$ | 5s | sent in 0.1 ms | id=1014391133 | balance_before=993.0
+[14:33:11.134] [PO] BALANCE CHECK -> before=993.0 | after=985.0 | delta=-8.000000
+[14:33:11.134] [PO] RESULT by v6 balance comparison + loss recheck -> LOSS
+[14:33:11.134] [MM] LOSS at final double #3 -> sequence LOST (all 4 steps). Reset to base 1.0$
+[14:33:11.134] [WORKER] FULL SEQUENCE LOST (4 steps) -> counted as ONE lost trade, lost stake $15
+.........................[14:33:11.227] [PO] ORDER SENT  -> EURUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391227 | balance_before=100
+[14:33:11.227] [PO] Balance received (PRACTICE): 99.0
+[14:33:11.227] [PO] BALANCE CHECK -> before=100 | after=99.0 | delta=-1.000000
+[14:33:11.227] [PO] RESULT by v6 balance comparison + loss recheck -> LOSS
+[14:33:11.227] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+.[14:33:11.233] [PO] ORDER SENT  -> EURUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391233 | balance_before=100
+[14:33:11.234] [PO] Balance received (PRACTICE): 100.92
+[14:33:11.234] [PO] BALANCE CHECK -> before=100 | after=100.92 | delta=+0.920000
+[14:33:11.234] [PO] RESULT by v6 balance comparison + loss recheck -> WIN
+[14:33:11.234] [MM] WIN at base -> stay on 1.0$
+.[14:33:11.240] [PO] ORDER SENT  -> EURUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391240 | balance_before=100
+[14:33:11.243] [PO] Balance received (PRACTICE): 100.92
+[14:33:11.243] [PO] BALANCE CHECK -> before=100 | after=100.92 | delta=+0.920000
+[14:33:11.243] [PO] RESULT by v6 balance comparison + loss recheck -> WIN
+[14:33:11.243] [MM] WIN at base -> stay on 1.0$
+.[14:33:11.250] [PO] ORDER SENT  -> EURUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391249 | balance_before=100
+[14:33:11.250] [PO] Balance received (PRACTICE): 99.0
+[14:33:11.250] [PO] BALANCE CHECK -> before=100 | after=99.0 | delta=-1.000000
+[14:33:11.250] [PO] RESULT by v6 balance comparison + loss recheck -> LOSS
+[14:33:11.250] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+.[14:33:11.258] [PO] ORDER SENT  -> EURUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391258 | balance_before=100
+[14:33:11.258] [PO] Balance received (PRACTICE): 99.0
+[14:33:11.258] [PO] BALANCE CHECK -> before=100 | after=99.0 | delta=-1.000000
+[14:33:11.258] [PO] RESULT by v6 balance comparison + loss recheck -> LOSS
+[14:33:11.258] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+[14:33:11.262] [PO] Balance received (PRACTICE): 100.84
+[14:33:11.262] [PO] ORDER SENT  -> GBPUSD_otc | CALL | 2.0$ | 5s | sent in 0.1 ms | id=1014391261 | balance_before=99.0
+[14:33:11.262] [PO] BALANCE CHECK -> before=99.0 | after=100.84 | delta=+1.840000
+[14:33:11.262] [PO] RESULT by v6 balance comparison + loss recheck -> WIN
+[14:33:11.262] [MM] WIN at double #1 -> sequence WON, back to base 1.0$
+.[14:33:11.268] [PO] ORDER SENT  -> GBPUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391268 | balance_before=100
+[14:33:11.271] [PO] Balance received (PRACTICE): 100.92
+[14:33:11.275] [PO] BALANCE CHECK -> before=100 | after=100.92 | delta=+0.920000
+[14:33:11.276] [PO] RESULT by v6 balance comparison + loss recheck -> WIN
+[14:33:11.276] [MM] WIN at base -> stay on 1.0$
+.....[14:33:11.301] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:11.320] [WS] failed phase=authentication code=PO_AUTH_REJECTED error=SafeIssue
+.[14:33:11.324] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:11.342] [PO] Balance received (PRACTICE): 100.0
+[14:33:11.343] [WS] authenticated; receiver started
+.[14:33:11.344] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:11.362] [PO] Balance received (PRACTICE): 250.0
+[14:33:11.362] [WS] authenticated; receiver started
+.[14:33:11.364] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:11.383] [WS] authenticated; receiver started
+.[14:33:11.385] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:11.405] [PO] Balance received (PRACTICE): 55.0
+[14:33:11.405] [WS] authenticated; receiver started
+.[14:33:11.407] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:11.425] [WS] authenticated; receiver started
+.[14:33:11.427] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:11.445] [WS] failed phase=transport code=PO_WS_NETWORK error=OSError
+[14:33:11.446] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=2
+[14:33:11.465] [WS] authenticated; receiver started
+.[14:33:11.467] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:11.486] [WS] failed phase=authentication code=PO_AUTH_NO_ACK error=TimeoutError
+[14:33:11.487] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=2
+[14:33:11.505] [WS] failed phase=authentication code=PO_AUTH_NO_ACK error=TimeoutError
+[14:33:11.505] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=3
+[14:33:11.523] [WS] failed phase=authentication code=PO_AUTH_NO_ACK error=TimeoutError
+..[14:33:11.586] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:11.604] [PO] balance frame arrived for the OTHER account type - stored SSID does not match the selected account mode
+[14:33:11.604] [WS] failed phase=authentication code=PO_ACCOUNT_MISMATCH error=SafeIssue
+.[14:33:11.606] [WS] connect host=demo-api-eu.po.market account=PRACTICE attempt=1
+[14:33:11.624] [WS] authenticated; receiver started
+[14:33:11.624] [WS] receiver ended code=PO_WS_NETWORK error=OSError
+.......[14:33:11.670] [HOST] public health OK status=200 attempts=1 next=300s
+[14:33:11.671] [HOST] public health OK status=200 attempts=2 next=300s
+[14:33:11.671] [HOST] public health OK status=200 attempts=3 next=300s
+.[14:33:11.672] [HOST] public health failed status=None error=OSError retry=30s
+[14:33:11.672] [HOST] public health failed status=503 error=RuntimeError retry=60s
+[14:33:11.672] [HOST] public health OK status=200 attempts=3 next=300s
+.[14:33:11.673] [HOST] public health failed status=200 error=RuntimeError retry=30s
+.[14:33:11.679] [HOST] public health OK status=200 attempts=1 next=300s
+[14:33:11.681] [HOST] public health OK status=200 attempts=2 next=300s
+..[14:33:11.692] [PO] Balance received (PRACTICE): 100.0
+[14:33:11.692] [PO] ORDER SENT  -> GBPUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391692 | balance_before=100
+[14:33:11.692] [PO] BALANCE CHECK -> before=100 | after=100.0 | delta=+0.000000
+[14:33:11.692] [PO] RESULT by v6 balance comparison + loss recheck -> DRAW
+[14:33:11.692] [MM] DRAW -> next signal uses the SAME amount 1.0$ (BASE)
+.[14:33:11.698] [PO] Balance received (PRACTICE): 100.92
+[14:33:11.698] [PO] ORDER SENT  -> GBPUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391698 | balance_before=100
+[14:33:11.698] [PO] BALANCE CHECK -> before=100 | after=100.92 | delta=+0.920000
+[14:33:11.698] [PO] RESULT by v6 balance comparison + loss recheck -> WIN
+[14:33:11.698] [MM] WIN at base -> stay on 1.0$
+..[14:33:11.704] [PO] ORDER SENT  -> GBPUSD_otc | CALL | 1.0$ | 5s | sent in 0.0 ms | id=1014391704 | balance_before=100
+[14:33:11.705] [PO] Balance unavailable -> UNCONFIRMED (no result recorded)
+[14:33:11.705] [WORKER] UNCONFIRMED -> amount kept at current step; auto-reconnecting and continuing without review
+.[14:33:11.717] [PO] Balance received (PRACTICE): 100.0
+[14:33:11.718] [PO] ORDER SENT  -> GBPUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391717 | balance_before=100
+[14:33:11.718] [PO] BALANCE CHECK -> before=100 | after=100.0 | delta=+0.000000
+[14:33:11.718] [PO] RESULT by v6 balance comparison + loss recheck -> DRAW
+[14:33:11.718] [MM] DRAW -> next signal uses the SAME amount 1.0$ (BASE)
+.[14:33:11.723] [PO] Balance received (PRACTICE): 99.0
+[14:33:11.723] [PO] ORDER SENT  -> GBPUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391723 | balance_before=100
+[14:33:11.723] [PO] BALANCE CHECK -> before=100 | after=99.0 | delta=-1.000000
+[14:33:11.723] [PO] RESULT by v6 balance comparison + loss recheck -> LOSS
+[14:33:11.723] [MM] LOSS -> next signal will DOUBLE to 2.0$ (DOUBLE #1/4)
+.[14:33:11.725] [PO] Possible LOSS -> rechecking for 2s before doubling
+[14:33:11.725] [PO] BALANCE CHECK -> before=100 | after=100.92 | delta=+0.920000
+[14:33:11.725] [PO] RESULT by v6 balance comparison + loss recheck -> WIN
+.[14:33:11.726] [PO] BALANCE CHECK -> before=100 | after=100.92 | delta=+0.920000
+[14:33:11.726] [PO] RESULT by v6 balance comparison + loss recheck -> WIN
+[14:33:11.726] [PO] BALANCE CHECK -> before=100 | after=100 | delta=+0.000000
+[14:33:11.726] [PO] RESULT by v6 balance comparison + loss recheck -> DRAW
+[14:33:11.726] [PO] BALANCE CHECK -> before=100 | after=99 | delta=-1.000000
+[14:33:11.726] [PO] RESULT by v6 balance comparison + loss recheck -> LOSS
+[14:33:11.726] [PO] Balance unavailable -> UNCONFIRMED (no result recorded)
+.[14:33:11.727] [PO] Possible LOSS -> rechecking for 2s before doubling
+[14:33:11.727] [PO] BALANCE CHECK -> before=100 | after=99 | delta=-1.000000
+[14:33:11.727] [PO] RESULT by v6 balance comparison + loss recheck -> LOSS
+.[14:33:11.732] [PO] Balance received (PRACTICE): 100.92
+[14:33:11.732] [PO] ORDER SENT  -> GBPUSD_otc | CALL | 1.0$ | 5s | sent in 0.1 ms | id=1014391732 | balance_before=100
+[14:33:11.732] [PO] BALANCE CHECK -> before=100 | after=100.92 | delta=+0.920000
+[14:33:11.733] [PO] RESULT by v6 balance comparison + loss recheck -> WIN
+[14:33:11.733] [MM] WIN at base -> stay on 1.0$
+............................[14:33:11.858] [PO] BALANCE CHECK -> before=100 | after=100.92 | delta=+0.920000
+[14:33:11.858] [PO] RESULT by v6 balance comparison + loss recheck -> WIN
+..[14:33:11.871] [PO] ORDER SENT  -> GBPUSD_otc | CALL | 1.0$ | 180s | sent in 0.1 ms | id=1014391871 | balance_before=100
+[14:33:11.879] [MM] WIN at base -> stay on 1.0$
+.[14:33:11.885] [PAYOUT] تم التحويل إلى AUDUSD_otc بعائد 95%
+...[14:33:11.893] [PAYOUT] تم التحويل إلى GBPUSD_otc بعائد 93%
+.
+----------------------------------------------------------------------
+Ran 320 tests in 3.526s
+
+OK

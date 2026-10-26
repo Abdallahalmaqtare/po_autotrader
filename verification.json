@@ -1,12 +1,23 @@
 {
-  "build": "v20-payout-cycle-fix",
-  "offline_tests": 190,
+  "build": "v25-long-trades-favorites-users",
+  "offline_tests": 320,
   "passed": true,
-  "live_trading_tested": false,
-  "unchanged_v19_core_sha256": {
+  "live_account_tested": false,
+  "render_uptime_guaranteed": false,
+  "v20_core_unchanged": {
+    "pocket_option.py": true,
+    "martingale.py": true,
+    "logger.py": true
+  },
+  "long_duration_wrapper": true,
+  "core_sha256": {
     "pocket_option.py": "2b8678e81bb48d23ba82fc575d550653bb364f86bcf952564e8ab16e7eb63073",
     "martingale.py": "3bec3b0fc32ec081c6761cefc7e36aec8defe02b0f252826af44652c1e2e44eb",
-    "telegram_signal.py": "3d478052a70c153def998ab38eb7497050794bce6dfa1b51eb6319df0742d9f2",
-    "logger.py": "cee9bcf05229308aecdf0628c9cf4d52d088ab650e70bcd7d06a5fb91ae4a8e9"
+    "logger.py": "cee9bcf05229308aecdf0628c9cf4d52d088ab650e70bcd7d06a5fb91ae4a8e9",
+    "cloud_transport.py": "07ab13218fd625d461b80a69abbc3aaac5cbd2b88b09f9c3937d72bbf6e49913",
+    "long_results.py": "1ec989b9a5e78b2059cc4a403259521fb23fb68fe90ee1b44ca085fda8b9b1e6",
+    "tenant_scope.py": "6afcc6d2f6d3c0a53cf880f8a47dbab65e957f634744e80b2b0d561de4125454",
+    "user_service.py": "a0b6a987e3eda91d79dba2402a7bce851f49059a765c24964647577eb9c0a75b",
+    "access_control.py": "dc1b236aba32f8293383a2e8feeac2b372405e0b3e06db896e9fdd380e055293"
   }
 }
