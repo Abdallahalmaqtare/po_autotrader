@@ -48,8 +48,6 @@ SHUTDOWN_GRACE_SECONDS = number('SHUTDOWN_GRACE_SECONDS', 20)
 # Compatibility only. Cloud account credentials come from MongoDB, never this value.
 PO_SSID = ''
 PO_WS_URL = DEMO_URL
-# websockets 15 may choose a proxy automatically; require explicit opt-in.
-PO_USE_SYSTEM_PROXY = os.getenv('PO_USE_SYSTEM_PROXY','false').lower() in ('1','true','yes')
 
 
 def validate_startup():

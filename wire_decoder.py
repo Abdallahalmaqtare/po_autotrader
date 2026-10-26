@@ -29,11 +29,8 @@ def payload_json(frame):
 def event_payload(value):
     if isinstance(value,list) and value and isinstance(value[0],str): return [value]
     if isinstance(value,dict):
-        if 'deals' in value and isinstance(value['deals'],list):return [['closedDeals',value]]
-        if 'requestId' in value and 'asset' in value and 'amount' in value:return [['orderData',value]]
-        if 'balance' in value:return [['updateBalance',value]]
         name=value.get('event')
-        if name in ('updateAssets','assets','updatePayout','updatePayouts','successopenOrder','successcloseOrder','closedDeals','updateBalance','successauth','profile','updateProfile','failauth','errorauth','authError'):
+        if name in ('updateAssets','assets','updatePayout','updatePayouts'):
             return [[name,value.get('data',value.get('assets'))]]
     if isinstance(value,list) and any(isinstance(row,list) and len(row)>5 and symbol(row[1]) for row in value):
         return [['updateAssets',value]]
@@ -47,9 +44,6 @@ class EventDecoder:
 
     def feed(self,frame):
         try:
-            if isinstance(frame,bytes) and frame.startswith((b'42',b'45')):
-                if len(frame)>MAX_BYTES:raise ValueError('frame_too_large')
-                frame=frame.decode('utf-8')
             if isinstance(frame,str):
                 # Engine.IO message (4) + Socket.IO binary event (5), with optional
                 # namespace/ack before JSON. Never scan arbitrary text for numbers.

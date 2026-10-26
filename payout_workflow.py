@@ -23,8 +23,6 @@ class PayoutWorkflow:
 
     async def refresh_payout_ui(self):
         async with self.operations:
-            if self.pending and self.pending.get('strict_result'):
-                return self.payout_status()+'\nيوجد أمر غير محسوم؛ لا نقطع اتصال انتظار نتيجته لتحديث العائد.'
             if self.running:
                 self.payout_refresh_requested=True
                 return self.payout_status()+'\nطُلب تجديد الجدول بين الصفقات؛ لا نقطع صفقة مفتوحة.'
@@ -58,7 +56,7 @@ class PayoutWorkflow:
         return 'تمت مزامنة الزوج والمدة مع MetaTrading؛ التداول لا يبدأ إلا بأمر Start.'
 
     def entry_eligible(self,t,policy,mode):
-        if self.stop_event.is_set() or self.pause_requested or risk_state(self.repo.doc)['reason']: return False
+        if self.stop_event.is_set() or risk_state(self.repo.doc)['reason']: return False
         action,_=transition(self.repo.doc['schedule'],self.repo.doc['runtime'].get('cycle',cycle_state()),
                             int(self.repo.doc['runtime'].get('martingale_step',0)),False,False,self.clock())
         if action in ('REST','STOP'):return False
