@@ -105,6 +105,10 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
         # client after get_entity failed, then skip initialization on retry.
         if self.tg and self.tg.is_connected() and self.listener is not None:
             return
+        close_signal = getattr(self.listener, 'close', None)
+        if close_signal:
+            with suppress(Exception):
+                await close_signal()
         if self.tg:
             with suppress(Exception):
                 await self.tg.disconnect()
@@ -476,6 +480,10 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
 
     async def close(self):
         await self.stop()
+        close_signal = getattr(self.listener, 'close', None)
+        if close_signal:
+            with suppress(Exception):
+                await close_signal()
         if self.po:
             await self.po.close()
         if self.tg:

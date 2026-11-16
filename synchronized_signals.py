@@ -2,7 +2,8 @@
 import asyncio
 from datetime import datetime, timezone
 from telegram_signal import SignalListener, parse_direction
-from meta_navigation import MetaNavigator, NavigationError, asset_from_text, duration_from_text
+from meta_navigation import NavigationError, asset_from_text, duration_from_text
+from meta_webapp import AdaptiveMetaNavigator as MetaNavigator
 import config
 
 
@@ -83,14 +84,26 @@ class SynchronizedSignalListener(SignalListener):
                 await self.nav.new_signal(self.arm)
         self.first_signal=False
         try:
-            text=await asyncio.wait_for(self._pending.get(),timeout=config.SIGNAL_TIMEOUT_SECONDS)
+            if self.nav.web_active:
+                self.nav.cancel=cancel
+                text=await self.nav.wait_signal(config.SIGNAL_TIMEOUT_SECONDS)
+            else:
+                text=await asyncio.wait_for(self._pending.get(),timeout=config.SIGNAL_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             self.disarm(); self.prepared=None
             raise NavigationError('META_SIGNAL_TIMEOUT') from None
+        except (NavigationError, asyncio.CancelledError):
+            self.disarm(); self.prepared=None
+            raise
         self.armed_at=None
         self.last_text=text
         self.last_received=asyncio.get_running_loop().time()
         return parse_direction(text)
+
+    async def close(self):
+        self.disarm()
+        if self.nav:
+            await self.nav.close()
 
     def verifies(self,asset,duration,max_age=10):
         return (self.expected==(asset,duration) and asset_from_text(self.last_text)==asset

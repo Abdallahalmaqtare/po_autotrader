@@ -4,10 +4,12 @@ services:
     runtime: python
     plan: starter
     numInstances: 1
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
     startCommand: python -u run.py
     healthCheckPath: /health
     envVars:
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: CONTROL_BOT_TOKEN
