@@ -416,12 +416,32 @@ class AdaptiveMetaNavigator(MetaNavigator):
 
     async def ensure(self):
         if self.web is not None: return
+        import os
+        from diagnostics import SafeIssue
+        backend = os.getenv('META_SIGNAL_BACKEND', 'auto').strip().lower()
+        if backend not in ('auto','http','browser','telegram'):
+            raise SafeIssue('META_API_CONFIG')
+        if backend == 'telegram': return
         launch = await self.discover()
+        if launch is None and backend == 'http':
+            # Explicit HTTP mode must NEVER fall through to legacy trading or
+            # silently bypass HTTP dry-run. /start is a menu request, not a signal.
+            self.check()
+            await self.client.send_message(self.entity, '/start')
+            for _ in range(10):
+                self.check()
+                await asyncio.sleep(.2)
+                launch = await self.discover()
+                if launch is not None: break
+            if launch is None: raise SafeIssue('META_API_NAVIGATION')
         if launch is None:
-            # Keep legacy /start recovery. Discovery is repeated next time so an
-            # existing conversation can migrate to Beta App without re-login.
+            # Auto mode preserves the legacy navigator for old message bots.
             return
-        web = MiniApp(self)
+        if backend in ('auto','http'):
+            from meta_api_client import HTTPMiniApp
+            web = HTTPMiniApp(self)
+        else:
+            web = MiniApp(self)
         await web.launch(launch)
         self.web = web
 

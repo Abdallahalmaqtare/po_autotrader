@@ -146,7 +146,7 @@ def assets_kb(page):
     rows += [[('<' if page > 0 else '·', f'assets:{page-1}' if page > 0 else 'noop'),
               (f'{page+1}/{total}', 'noop'),
               ('>' if page < total-1 else '·', f'assets:{page+1}' if page < total-1 else 'noop')],
-             [('Back', 'settings')]]
+             [('Back', 'settings'), ('AUD/CAD (OTC)', 'asset:AUDCAD_otc')]]
     return kb(rows)
 
 

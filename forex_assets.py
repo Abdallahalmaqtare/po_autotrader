@@ -6,3 +6,7 @@ FOREX_OTC = [('EUR/USD (OTC)', 'EURUSD_otc'), ('GBP/USD (OTC)', 'GBPUSD_otc'), (
 SYMBOL_NAMES = {sym: name for name, sym in FOREX_OTC}
 LEGACY_SYMBOL_NAMES = {'EURUSD_otc': 'EUR/USD OTC', 'EURNZD_otc': 'EUR/NZD OTC', 'EURCHF_otc': 'EUR/CHF OTC', 'GBPUSD_otc': 'GBP/USD OTC', 'USDJPY_otc': 'USD/JPY OTC', 'AUDUSD_otc': 'AUD/USD OTC', 'CADJPY_otc': 'CAD/JPY OTC', 'CHFJPY_otc': 'CHF/JPY OTC', 'AUDCAD_otc': 'AUD/CAD OTC', 'AUDCHF_otc': 'AUD/CHF OTC', 'AUDJPY_otc': 'AUD/JPY OTC', 'AUDNZD_otc': 'AUD/NZD OTC', 'CADCHF_otc': 'CAD/CHF OTC', 'EURAUD_otc': 'EUR/AUD OTC', 'EURCAD_otc': 'EUR/CAD OTC', 'EURGBP_otc': 'EUR/GBP OTC', 'EURJPY_otc': 'EUR/JPY OTC', 'GBPAUD_otc': 'GBP/AUD OTC', 'GBPCAD_otc': 'GBP/CAD OTC', 'GBPCHF_otc': 'GBP/CHF OTC', 'GBPJPY_otc': 'GBP/JPY OTC', 'GBPNZD_otc': 'GBP/NZD OTC', 'NZDJPY_otc': 'NZD/JPY OTC', 'NZDUSD_otc': 'NZD/USD OTC', 'USDBRL_otc': 'USD/BRL OTC', 'USDCAD_otc': 'USD/CAD OTC', 'USDCHF_otc': 'USD/CHF OTC', 'USDINR_otc': 'USD/INR OTC', 'USDMXN_otc': 'USD/MXN OTC', 'USDSGD_otc': 'USD/SGD OTC', 'USDTRY_otc': 'USD/TRY OTC', 'USDZAR_otc': 'USD/ZAR OTC'}
 STORED_ASSET_NAMES = {**LEGACY_SYMBOL_NAMES, **SYMBOL_NAMES}
+# v22: observed in the user's Beta App bootstrap. Preserve the original five
+# pages verbatim; expose this confirmed extra pair as a supplemental control.
+SUPPLEMENTAL_SYMBOL_NAMES = {'AUDCAD_otc': 'AUD/CAD (OTC)'}
+SELECTABLE_SYMBOL_NAMES = {**SYMBOL_NAMES, **SUPPLEMENTAL_SYMBOL_NAMES}

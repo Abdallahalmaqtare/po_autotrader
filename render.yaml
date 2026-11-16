@@ -4,12 +4,30 @@ services:
     runtime: python
     plan: starter
     numInstances: 1
-    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
+    buildCommand: pip install -r requirements.txt && python meta_preflight.py
     startCommand: python -u run.py
     healthCheckPath: /health
     envVars:
-      - key: PLAYWRIGHT_BROWSERS_PATH
-        value: "0"
+      - key: META_SIGNAL_BACKEND
+        value: http
+      - key: META_API_BASE
+        value: https://sdasdsahdsa.lol/miniapp/api
+      - key: META_BOT_ID
+        value: "8808473133"
+      - key: META_DRY_RUN
+        value: "1"
+      - key: META_DEVICE_LANGUAGE
+        value: ar-YE
+      - key: META_POLL_SECONDS
+        value: "0.5"
+      - key: META_HTTP_TIMEOUT_SECONDS
+        value: "12"
+      - key: META_OPERATION_TIMEOUT_SECONDS
+        value: "45"
+      - key: SIGNAL_TIMEOUT_SECONDS
+        value: "45"
+      - key: DURATION_SECONDS
+        value: "60"
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: CONTROL_BOT_TOKEN
@@ -23,7 +41,7 @@ services:
       - key: TELEGRAM_STRING_SESSION
         sync: false
       - key: SIGNAL_BOT_USERNAME
-        value: "@AboodTradingOTCbot"
+        value: "@signal_meta_bot"
       - key: MONGO_URI
         sync: false
       - key: DB_NAME

@@ -5,7 +5,7 @@ import math
 import os
 from urllib.parse import urlparse
 import config
-from forex_assets import FOREX_OTC, SYMBOL_NAMES, STORED_ASSET_NAMES
+from forex_assets import FOREX_OTC, SYMBOL_NAMES, STORED_ASSET_NAMES, SELECTABLE_SYMBOL_NAMES
 from risk_limits import risk_defaults, validate_risk
 from recovery import recovery_defaults, state_defaults, validate_recovery
 from payout_guard import payout_defaults, validate_payout
@@ -122,8 +122,8 @@ def validate_document(doc):
 
 def patched(doc, fields):
     d = deepcopy(doc)
-    if 'trading.asset' in fields and fields['trading.asset'] not in SYMBOL_NAMES:
-        raise ValueError('اختر زوجاً من الصفحات الخمس المطابقة لبوت الإشارات')
+    if 'trading.asset' in fields and fields['trading.asset'] not in SELECTABLE_SYMBOL_NAMES:
+        raise ValueError('اختر زوجاً من صفحات الأصول أو زر AUD/CAD OTC الإضافي')
     allowed = {'account_mode'} | {'schedule.' + k for k in cycle_defaults()} | {'payout.' + k for k in payout_defaults()} | {'recovery.' + k for k in recovery_defaults()} | {'risk.' + k for k in risk_defaults()} | {'trading.' + k for k in defaults()['trading']} | {
         f'{kind}_account.{key}' for kind in ('real', 'demo') for key in ('ssid', 'ws_url', 'uid')}
     for path, value in fields.items():

@@ -2,6 +2,7 @@
 import asyncio
 from datetime import datetime, timezone
 from telegram_signal import SignalListener, parse_direction
+from diagnostics import SafeIssue
 from meta_navigation import NavigationError, asset_from_text, duration_from_text
 from meta_webapp import AdaptiveMetaNavigator as MetaNavigator
 import config
@@ -58,14 +59,23 @@ class SynchronizedSignalListener(SignalListener):
             self.disarm()
             self.expected=(asset,duration)
             self.prepared=None
-            self.first_signal=await self.nav.configure(asset,duration,self.arm,cancel)
+            try:
+                self.first_signal=await self.nav.configure(asset,duration,self.arm,cancel)
+            except SafeIssue:
+                self.disarm()
+                await self.nav.close()
+                raise
             self.prepared=(asset,duration)
             print(f'[META] synchronized {asset} {duration}s; first_signal={self.first_signal}',flush=True)
 
     async def available_assets(self,cancel=None):
         async with self.nav_lock:
             self.disarm(); self.prepared=None
-            return await self.nav.available(cancel)
+            try:
+                return await self.nav.available(cancel)
+            except SafeIssue:
+                await self.nav.close()
+                raise
 
     async def next_direction(self,asset,duration,cancel=None):
         if self.first_signal and self.armed_at is not None and datetime.now(timezone.utc).timestamp()-self.armed_at>10:
@@ -76,12 +86,17 @@ class SynchronizedSignalListener(SignalListener):
             async with self.nav_lock:
                 self.nav.cancel=cancel
                 # Selection is verified on the live keyboard before requesting.
-                msg=await self.nav.screen()
-                text=getattr(msg,'raw_text','') or ''
-                if asset_from_text(text)!=asset or duration_from_text(text)!=duration:
-                    self.prepared=None
-                    raise NavigationError('META_SELECTION_CHANGED')
-                await self.nav.new_signal(self.arm)
+                try:
+                    msg=await self.nav.screen()
+                    text=getattr(msg,'raw_text','') or ''
+                    if asset_from_text(text)!=asset or duration_from_text(text)!=duration:
+                        self.prepared=None
+                        raise NavigationError('META_SELECTION_CHANGED')
+                    await self.nav.new_signal(self.arm)
+                except SafeIssue:
+                    self.disarm(); self.prepared=None
+                    await self.nav.close()
+                    raise
         self.first_signal=False
         try:
             if self.nav.web_active:
@@ -94,6 +109,10 @@ class SynchronizedSignalListener(SignalListener):
             raise NavigationError('META_SIGNAL_TIMEOUT') from None
         except (NavigationError, asyncio.CancelledError):
             self.disarm(); self.prepared=None
+            raise
+        except SafeIssue:
+            self.disarm(); self.prepared=None
+            await self.nav.close()
             raise
         self.armed_at=None
         self.last_text=text

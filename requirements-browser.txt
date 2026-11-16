@@ -1,0 +1,3 @@
+# Optional: only for META_SIGNAL_BACKEND=browser and the original v21 browser tests.
+-r requirements.txt
+playwright==1.58.0
