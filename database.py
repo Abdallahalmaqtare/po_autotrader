@@ -30,12 +30,16 @@ class Repository(RegistryRepository):
         self.doc = None
         self.lock = asyncio.Lock()
         self.leader = False
+        self.startup_stage='created'
 
     async def initialize(self):
+        self.startup_stage='mongo_ping'
         if self.client:
             await self.client.admin.command('ping')
+        self.startup_stage='defaults_seed'
         await self.collection.update_one({'_id': 'current_settings'},
                                          {'$setOnInsert': defaults()}, upsert=True)
+        self.startup_stage='settings_read'
         raw = await self.collection.find_one({'_id': 'current_settings'})
         # Merge new schema defaults in RAM, without overriding any stored values.
         def merge(a, b):
@@ -46,7 +50,11 @@ class Repository(RegistryRepository):
                     merge(a[k], v)
             return a
         previous = deepcopy(raw)
-        self.doc = validate_document(migrate(merge(raw, defaults())))
+        self.startup_stage='settings_migration'
+        candidate=migrate(merge(raw,defaults()))
+        self.startup_stage='settings_validation'
+        candidate=validate_document(candidate)
+        self.doc=candidate
         if self.leader:
             missing = {}
             def collect(old, new, prefix=''):
@@ -56,11 +64,15 @@ class Repository(RegistryRepository):
                         missing[path] = deepcopy(value)
                     elif isinstance(value, dict) and isinstance(old[key], dict):
                         collect(old[key], value, path + '.')
+                    elif old[key] != value:
+                        missing[path]=deepcopy(value)
             collect(previous, self.doc)
             if missing:
+                self.startup_stage='migration_save'
                 result = await self.collection.update_one(self.fence(), {'$set': missing})
                 if result.matched_count != 1:
                     raise RuntimeError('lease_lost')
+        self.startup_stage='settings_ready'
         return self.doc
 
     def fence(self):

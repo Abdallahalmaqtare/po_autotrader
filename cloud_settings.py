@@ -68,16 +68,25 @@ def empty_stats():
                 sequence_losses=0, lost_amount=0.0)
 
 
+def default_uid(key):
+    raw=os.getenv(key,'0').strip().strip("\"'")
+    try:
+        value=int(raw or '0')
+        return value if value>=0 else 0
+    except (ValueError,TypeError):
+        return 0  # raw sessions still require a positive UID at auth_frame preflight
+
+
 def defaults():
     return {
         '_id': 'current_settings', 'schema_version': 1,
         'account_mode': config.ACCOUNT_TYPE,
         'demo_account': {'ssid': os.getenv('PO_SSID_DEMO', ''),
                          'ws_url': os.getenv('PO_WS_URL_DEMO', config.DEMO_URL),
-                         'uid': int(os.getenv('PO_UID_DEMO', '0') or 0)},
+                         'uid': default_uid('PO_UID_DEMO')},
         'real_account': {'ssid': os.getenv('PO_SSID_REAL', ''),
                          'ws_url': os.getenv('PO_WS_URL_REAL', config.REAL_URL),
-                         'uid': int(os.getenv('PO_UID_REAL', '0') or 0)},
+                         'uid': default_uid('PO_UID_REAL')},
         'trading': dict(asset=config.ASSET, trade_amount=config.TRADE_AMOUNT,
                         duration_seconds=config.DURATION_SECONDS,
                         martingale_steps=config.MARTINGALE_STEPS,
@@ -98,28 +107,32 @@ def defaults():
 
 
 def validate_document(doc):
-    if doc.get('account_mode') not in MODES:
-        raise ValueError('نوع حساب غير صالح')
-    validate_risk(doc.get('risk', risk_defaults()))
-    validate_payout(doc.get('payout', payout_defaults()))
-    validate_cycle(doc.get('schedule', cycle_defaults()))
-    t = doc['trading']
-    if t.get('asset') not in STORED_ASSET_NAMES:
-        raise ValueError('يُسمح بأزواج فوركس OTC الموجودة في القائمة فقط')
-    valid_number(t['trade_amount'], .01, 100000)
-    validate_recovery(doc.get('recovery', recovery_defaults()), t['trade_amount'])
-    if t['duration_seconds'] not in DURATIONS:
-        raise ValueError('مدة غير مدعومة في قائمة البوت')
-    if isinstance(t['martingale_steps'], bool) or t['martingale_steps'] not in range(5):
-        raise ValueError('خطوات التدبيل بين 0 و4')
-    for key in ('entry_delay_seconds', 'loop_delay_seconds', 'result_timeout_extra',
-                'balance_settle_seconds', 'loss_recheck_seconds'):
-        valid_number(t[key], 0, 120)
-    for key in ('demo_account', 'real_account'):
-        valid_url(doc[key]['ws_url'])
+    from startup_settings import field_check, SettingsIssue
+    with field_check('account_mode'):
+        if doc.get('account_mode') not in MODES:
+            raise ValueError('نوع حساب غير صالح')
+    with field_check('risk'):validate_risk(doc.get('risk', risk_defaults()))
+    with field_check('payout'):validate_payout(doc.get('payout', payout_defaults()))
+    with field_check('schedule'):validate_cycle(doc.get('schedule', cycle_defaults()))
+    with field_check('trading'):
+        t=doc['trading']
+        if not isinstance(t,dict):raise ValueError()
+    with field_check('trading.asset'):
+        if t.get('asset') not in STORED_ASSET_NAMES:raise ValueError()
+    with field_check('trading.trade_amount'):valid_number(t['trade_amount'],.01,100000)
+    with field_check('recovery'):validate_recovery(doc.get('recovery',recovery_defaults()),t['trade_amount'])
+    with field_check('trading.duration_seconds'):
+        if t['duration_seconds'] not in DURATIONS:raise ValueError()
+    with field_check('trading.martingale_steps'):
+        if isinstance(t['martingale_steps'],bool) or t['martingale_steps'] not in range(5):raise ValueError()
+    for key in ('entry_delay_seconds','loop_delay_seconds','result_timeout_extra',
+                'balance_settle_seconds','loss_recheck_seconds'):
+        with field_check('trading.'+key):valid_number(t[key],0,120)
+    for key in ('demo_account','real_account'):
+        with field_check(key+'.ws_url'):valid_url(doc[key]['ws_url'])
     if 'signal_sources' in doc:
         from profile_registry import validate_registries
-        validate_registries(doc)
+        with field_check('registries','REGISTRY_VALIDATION_FAILED'):validate_registries(doc)
     return doc
 
 

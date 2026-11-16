@@ -63,9 +63,22 @@ def snapshot(doc,mode=None):
 
 
 def migrate(doc):
+    from startup_settings import field_check, SettingsIssue
+    # Missing fields may be completed. Empty/corrupt registries are NOT silently
+    # replaced: the administrator's saved selections and ledger must not be lost.
     if 'signal_sources' not in doc:
-        doc['signal_sources']={'legacy':source_spec(selected_source(doc))}
+        with field_check('signal_sources.legacy', 'SOURCE_MIGRATION_INVALID'):
+            doc['signal_sources']={'legacy':source_spec(selected_source(doc))}
         doc['active_signal_source']='legacy'
+    if not isinstance(doc['signal_sources'],dict) or not doc['signal_sources']:
+        raise SettingsIssue('SOURCE_REGISTRY_INVALID','signal_sources')
+    for index,(key,value) in enumerate(doc['signal_sources'].items()):
+        with field_check(f'signal_sources[{index}]','SOURCE_SETTINGS_INVALID'):
+            canonical=source_spec(value)
+            # Canonical comparable fields only; preserve optional metadata.
+            value.update(canonical)
+    if 'active_signal_source' not in doc and len(doc['signal_sources'])==1:
+        doc['active_signal_source']=next(iter(doc['signal_sources']))
     if 'broker_profiles' not in doc:
         doc['broker_profiles']={};doc['active_accounts']={}
         for mode in ('PRACTICE','REAL'):
@@ -73,6 +86,15 @@ def migrate(doc):
             doc['active_accounts'][mode]=key
             doc['broker_profiles'][key]=dict(name='الحساب السابق '+mode,mode=mode,
                 credentials=deepcopy(doc[account_key(mode)]),**snapshot(doc,mode))
+    if not isinstance(doc['broker_profiles'],dict) or not doc['broker_profiles']:
+        raise SettingsIssue('ACCOUNT_REGISTRY_INVALID','broker_profiles')
+    if 'active_accounts' not in doc:
+        doc['active_accounts']={}
+    for mode in ('PRACTICE','REAL'):
+        if mode not in doc['active_accounts']:
+            candidates=[key for key,p in doc['broker_profiles'].items() if p.get('mode')==mode]
+            if len(candidates)==1:doc['active_accounts'][mode]=candidates[0]
+            else:raise SettingsIssue('ACCOUNT_SELECTION_REQUIRED','active_accounts.'+mode)
     return doc
 
 
@@ -104,7 +126,8 @@ def validate_registries(doc):
     if doc.get('active_signal_source') not in sources:raise ValueError('مصدر نشط غير صالح')
     for key,value in sources.items():
         if not re.fullmatch(r'[a-zA-Z0-9_]{1,40}',key):raise ValueError('معرّف مصدر غير صالح')
-        if source_spec(value)!=value:raise ValueError('إعدادات مصدر غير صالحة')
+        canonical=source_spec(value)
+        if any(value.get(k)!=v for k,v in canonical.items()):raise ValueError('إعدادات مصدر غير صالحة')
     profiles=doc.get('broker_profiles',{})
     if not isinstance(profiles,dict) or not 2<=len(profiles)<=200:raise ValueError('قائمة الحسابات غير صالحة')
     from cloud_settings import valid_url
