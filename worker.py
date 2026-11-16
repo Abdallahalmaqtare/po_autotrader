@@ -13,7 +13,9 @@ import config
 from cloud_settings import auth_frame
 from cloud_transport import CloudPocket
 from martingale import MoneyManager
-from synchronized_signals import SynchronizedSignalListener as SignalListener
+from source_signals import SourceSignalListener as SignalListener
+from profile_workflow import ProfileWorkflow
+from profile_registry import selected_source, source_key, active_profile_id, manual_mode
 from meta_navigation import NavigationError
 from payout_guard import PayoutBlocked
 from payout_workflow import PayoutWorkflow
@@ -24,7 +26,7 @@ from risk_limits import risk_state, limit_stop_text
 from recovery import sizing, selected_state
 
 
-class TradingWorker(PayoutWorkflow, CycleWorkflow):
+class TradingWorker(ProfileWorkflow, PayoutWorkflow, CycleWorkflow):
     def __init__(self, repo, po_factory=CloudPocket, telegram_factory=TelegramClient):
         self.repo = repo
         self.po_factory = po_factory
@@ -50,6 +52,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
         self.payout_refresh_requested=False
         self.cycle_note=''
         self.cycle_force_rest=False
+        self._listener_source_key=None
 
     @property
     def pending(self):
@@ -103,7 +106,10 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
     async def _telegram(self):
         # A live socket is NOT sufficient: v11 could leave an uninitialized
         # client after get_entity failed, then skip initialization on retry.
-        if self.tg and self.tg.is_connected() and self.listener is not None:
+        selected=selected_source(self.repo.doc)
+        requested_key=source_key(self.repo.doc)
+        if (self.tg and self.tg.is_connected() and self.listener is not None
+                and self._listener_source_key==requested_key):
             return
         if self.tg:
             with suppress(Exception):
@@ -111,7 +117,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
         self.tg, self.listener = None, None
         self.stage = 'telegram_session_parse'
         session = session_from_env(config.TELEGRAM_STRING_SESSION)
-        config.SIGNAL_BOT_USERNAME = signal_username(config.SIGNAL_BOT_USERNAME)
+        config.SIGNAL_BOT_USERNAME = signal_username(selected['username'])
         try:
             self.stage = 'telegram_client_create'
             self.tg = self.telegram_factory(session, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
@@ -123,10 +129,13 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                     raise SafeIssue('TG_SESSION_UNAUTHORIZED')
                 self.stage = 'signal_bot_resolve'
                 listener = SignalListener(self.tg)
+                bind=getattr(listener,'bind_source',None)
+                if callable(bind):bind(selected)
                 await listener.init()
                 if not getattr(listener.bot_entity, 'bot', False):
                     raise SafeIssue('SIGNAL_TARGET_NOT_BOT')
                 self.listener = listener
+                self._listener_source_key=requested_key
         except BaseException:
             if self.tg:
                 with suppress(Exception):
@@ -143,7 +152,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 self.stage = 'telegram_session_parse'
                 session_from_env(config.TELEGRAM_STRING_SESSION)
                 self.stage = 'signal_bot_resolve'
-                signal_username(config.SIGNAL_BOT_USERNAME)
+                signal_username(selected_source(self.repo.doc)['username'])
                 await self._telegram()
                 self.stage = 'pocket_credentials'
                 await self.connect_account()
@@ -214,7 +223,7 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 self.stage = 'telegram_session_parse'
                 session_from_env(config.TELEGRAM_STRING_SESSION)
                 self.stage = 'signal_bot_resolve'
-                signal_username(config.SIGNAL_BOT_USERNAME)
+                signal_username(selected_source(self.repo.doc)['username'])
             except Exception as exc:
                 diagnostic = await self.record_error(exc, send_notification=False)
                 self.stage = 'error'
@@ -236,7 +245,9 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
             selection_requested = any(key in fields for key in ('trading.asset','trading.duration_seconds'))
             if reconnect:
                 # No future entries on old account. Cancel wait but keep durable pending marker.
-                await self._stop(immediate=True)
+                await self._stop()
+                if self.pending:
+                    raise ValueError('يوجد أمر غير محسوم في الحساب الحالي؛ راجعه قبل التبديل')
                 if self.po:
                     await self.po.close()
             await self.repo.update(fields)
@@ -260,6 +271,11 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 if self.pending:
                     return 'تم الحفظ والاتصال بالحساب الجديد؛ التداول متوقف حتى مراجعة الأمر المعلّق في الحساب السابق.'
                 return 'تم الحفظ وإعادة الاتصال ببيانات الحساب المختار.'
+            if selection_requested and manual_mode(self.repo.doc):
+                if self.listener:
+                    disarm=getattr(self.listener,'disarm',None)
+                    if callable(disarm):disarm()
+                return 'تم الحفظ؛ الوضع يدوي ولن نغيّر قوائم مصدر الإشارات. طابق الزوج والمدة بنفسك ثم Start.'
             if selection_requested and not self.running:
                 try:
                     return await self.synchronize_selection()
@@ -306,6 +322,8 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 mode = self.repo.doc['account_mode']
                 self.selection_changed.clear()
                 t = deepcopy(self.repo.doc['trading'])
+                source_snapshot=source_key(self.repo.doc)
+                profile_snapshot=active_profile_id(self.repo.doc)
                 payout_policy = deepcopy(self.repo.doc['payout'])
                 recovery_policy = deepcopy(self.repo.doc['recovery'])
                 effective_base, recovery_context = sizing(self.repo.doc, mode)
@@ -373,6 +391,8 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                     break
                 # Changes received while waiting invalidate this old signal.
                 if (t != self.repo.doc['trading'] or mode != self.repo.doc['account_mode']
+                        or source_snapshot != source_key(self.repo.doc)
+                        or profile_snapshot != active_profile_id(self.repo.doc)
                         or payout_policy != self.repo.doc['payout']
                         or recovery_policy != self.repo.doc['recovery']
                         or recovery_context['epoch'] != selected_state(self.repo.doc, mode)['epoch']):
@@ -390,7 +410,8 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 order = dict(id=uuid4().hex, mode=mode, amount=mm.current_amount(),
                              asset=t['asset'], direction=direction,
                              created_at=time.time(), step=mm.step, sizing_signature=list(sig),
-                             recovery_context=deepcopy(recovery_context))
+                             recovery_context=deepcopy(recovery_context),
+                             profile_id=profile_snapshot,signal_source_id=self.repo.doc.get('active_signal_source'))
                 if order['amount'] > self.po.balance:
                     raise SafeIssue('INSUFFICIENT_BALANCE')
                 # Persist BEFORE send: redeploy must never automatically repeat an uncertain order.
@@ -404,7 +425,9 @@ class TradingWorker(PayoutWorkflow, CycleWorkflow):
                 before = None
                 result = None
                 try:
-                    self.po.entry_check=lambda: self.entry_eligible(t,payout_policy,mode)
+                    self.po.entry_check=lambda: (source_snapshot==source_key(self.repo.doc)
+                        and profile_snapshot==active_profile_id(self.repo.doc)
+                        and self.entry_eligible(t,payout_policy,mode))
                     ok = await asyncio.wait_for(self.po.place_trade(direction, order['amount']),
                                                  config.CONNECT_TIMEOUT_SECONDS)
                     before = self.po._balance_before

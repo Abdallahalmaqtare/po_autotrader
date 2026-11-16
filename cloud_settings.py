@@ -117,6 +117,9 @@ def validate_document(doc):
         valid_number(t[key], 0, 120)
     for key in ('demo_account', 'real_account'):
         valid_url(doc[key]['ws_url'])
+    if 'signal_sources' in doc:
+        from profile_registry import validate_registries
+        validate_registries(doc)
     return doc
 
 

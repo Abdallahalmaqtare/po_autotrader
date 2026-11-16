@@ -8,13 +8,14 @@ from pymongo.write_concern import WriteConcern
 from cloud_settings import defaults, validate_document, patched, empty_stats, MODES
 from recovery import after_result, selected_state, reset_state, recovery_defaults
 from work_cycle import cycle_state
+from profile_registry import RegistryRepository, migrate, capture, active_profile_id, account_key
 
 
 def utcnow():
     return datetime.now(timezone.utc)
 
 
-class Repository:
+class Repository(RegistryRepository):
     def __init__(self, uri, db_name, collection=None):
         self.client = None
         if collection is None:
@@ -45,7 +46,7 @@ class Repository:
                     merge(a[k], v)
             return a
         previous = deepcopy(raw)
-        self.doc = validate_document(merge(raw, defaults()))
+        self.doc = validate_document(migrate(merge(raw, defaults())))
         if self.leader:
             missing = {}
             def collect(old, new, prefix=''):
@@ -96,6 +97,15 @@ class Repository:
         async with self.lock:
             new_doc = patched(self.doc, fields)
             writes = deepcopy(fields)
+            if new_doc['account_mode'] != self.doc['account_mode']:
+                from profile_registry import project
+                temporary_mode=new_doc['account_mode']
+                new_doc['account_mode']=self.doc['account_mode']
+                capture(new_doc)
+                new_doc['account_mode']=temporary_mode
+                target = active_profile_id(new_doc, new_doc['account_mode'])
+                project(new_doc, target)
+                writes.update({k: deepcopy(new_doc[k]) for k in ('account_mode','broker_profiles','account_stats','runtime','real_account','demo_account')})
             if new_doc['schedule']!=self.doc['schedule']:
                 writes['runtime.cycle']=cycle_state()
                 new_doc['runtime']['cycle']=cycle_state()
@@ -105,6 +115,13 @@ class Repository:
                          new_doc['trading']['trade_amount'] != self.doc['trading']['trade_amount'])
             credential_modes = {mode for mode, key in (('REAL','real_account'), ('PRACTICE','demo_account'))
                                 if new_doc[key] != self.doc[key]}
+            from account_details import credential_uid
+            for mode in credential_modes:
+                key=account_key(mode)
+                before_uid=credential_uid(self.doc[key],mode)
+                after_uid=credential_uid(new_doc[key],mode)
+                if before_uid and after_uid and before_uid!=after_uid:
+                    raise ValueError('UID مختلف؛ أضف حساباً مستقلاً بدلاً من تحديث جلسة حساب آخر')
             reset_modes = set(MODES) if reset_all else credential_modes
             if reset_modes:
                 for mode in reset_modes:
@@ -113,6 +130,12 @@ class Repository:
                     new_doc['runtime']['recovery'][mode] = value
                 writes.update({'runtime.martingale_step': 0, 'runtime.sizing_signature': None})
                 new_doc['runtime'].update(martingale_step=0, sizing_signature=None)
+            for mode in MODES:
+                capture(new_doc, mode)
+            # Compute non-overlapping root writes; this repository owns the lease.
+            # Never write a parent and child path together in one MongoDB update.
+            from profile_registry import top_changes
+            writes=top_changes(self.doc,new_doc)
             r = await self.collection.update_one(self.fence(), {'$set': writes})
             if r.matched_count != 1:
                 raise RuntimeError('lease_lost')
@@ -122,9 +145,13 @@ class Repository:
     async def save_cycle(self,state,expected):
         async with self.lock:
             if self.doc['schedule']!=expected:return False
-            result=await self.collection.update_one(self.fence(),{'$set':{'runtime.cycle':deepcopy(state)}})
+            writes={'runtime.cycle':deepcopy(state)}
+            profile=active_profile_id(self.doc)
+            if profile:writes['broker_profiles.'+profile+'.cycle']=deepcopy(state)
+            result=await self.collection.update_one(self.fence(),{'$set':writes})
             if result.matched_count!=1:raise RuntimeError('lease_lost')
             self.doc['runtime']['cycle']=deepcopy(state)
+            if profile:self.doc['broker_profiles'][profile]['cycle']=deepcopy(state)
             return True
 
     async def reserve(self, order):
@@ -141,6 +168,9 @@ class Repository:
         """Idempotent by pending ID. Unknown finances are never counted as full loss."""
         amount = order['amount']
         mode = order['mode']
+        profile_id=order.get('profile_id') or active_profile_id(self.doc,mode)
+        if profile_id != active_profile_id(self.doc,mode):
+            raise RuntimeError('order_profile_not_selected')
         q = self.fence()
         q['runtime.pending.id'] = order['id']
         inc = {}
@@ -158,7 +188,10 @@ class Repository:
             if seq_lost:
                 values['sequence_losses'] = seq_lost
                 values['lost_amount'] = round(seq_lost_amount, 6)
-            for prefix in ('session_stats', 'account_stats.' + mode):
+            prefixes=['session_stats', 'account_stats.' + mode]
+            if profile_id:
+                prefixes.append('broker_profiles.'+profile_id+'.stats')
+            for prefix in prefixes:
                 inc.update({prefix + '.' + k: v for k, v in values.items()})
         update = {'$set': {'runtime.pending': None, 'runtime.martingale_step': next_step,
                            'runtime.sizing_signature': order.get('sizing_signature')}}
@@ -174,12 +207,20 @@ class Repository:
             effective_step = 0 if changed_phase else next_step
             update['$set']['runtime.martingale_step'] = effective_step
             update['$set']['runtime.recovery.' + mode] = current
+            if profile_id:
+                prefix='broker_profiles.'+profile_id+'.'
+                update['$set'].update({prefix+'recovery':deepcopy(current),
+                    prefix+'martingale_step':effective_step,
+                    prefix+'sizing_signature':deepcopy(order.get('sizing_signature'))})
             r = await self.collection.update_one(q, update)
             if r.matched_count != 1:
                 raise RuntimeError('result_already_saved_or_lease_lost')
             self.doc['runtime'].update(pending=None, martingale_step=effective_step,
                                        sizing_signature=order.get('sizing_signature'))
             self.doc['runtime'].setdefault('recovery', {})[mode] = current
+            if profile_id:
+                self.doc['broker_profiles'][profile_id].update(recovery=deepcopy(current),
+                    martingale_step=effective_step,sizing_signature=deepcopy(order.get('sizing_signature')))
             for path, v in inc.items():
                 parts = path.split('.')
                 node = self.doc
@@ -207,9 +248,15 @@ class Repository:
                                'account_stats': {m: empty_stats() for m in MODES},
                                'runtime.martingale_step': 0,
                                'runtime.recovery': {m: reset_state(selected_state(self.doc, m)) for m in MODES}}}
+            profiles=deepcopy(self.doc.get('broker_profiles',{}))
+            for record in profiles.values():
+                record.update(stats=empty_stats(),martingale_step=0,sizing_signature=None,
+                    recovery=reset_state(record['recovery']),cycle=cycle_state())
+            update['$set']['broker_profiles']=profiles
             r = await self.collection.update_one(self.fence(), update)
             if r.matched_count != 1:
                 raise RuntimeError('lease_lost')
+            self.doc['broker_profiles']=profiles
             self.doc['session_stats'] = empty_stats()
             self.doc['account_stats'] = {m: empty_stats() for m in MODES}
             self.doc['runtime']['martingale_step'] = 0

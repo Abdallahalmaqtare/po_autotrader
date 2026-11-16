@@ -151,7 +151,7 @@ class MetaNavigator:
         except NavigationError:
             msg=await self.asset_screen()
         text=getattr(msg,'raw_text','') or ''
-        if (self.button(msg,'New signal') and asset_from_text(text)==asset
+        if (self.button(msg,getattr(self,'new_signal_label','New signal')) and asset_from_text(text)==asset
                 and duration_from_text(text)==duration): return False
         msg=await self.first_page(await self.asset_screen())
         seen=set()
@@ -182,7 +182,7 @@ class MetaNavigator:
 
     async def new_signal(self,before_click):
         msg=await self.screen()
-        btn=self.button(msg,'New signal')
+        btn=self.button(msg,getattr(self,'new_signal_label','New signal'))
         if btn is None: raise NavigationError('META_NEW_SIGNAL_MISSING')
         before_click()
         await self.click(msg,btn,transition=False)

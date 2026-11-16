@@ -16,6 +16,8 @@ from branded_ui import get_panels
 from recovery import recovery_text, short_summary
 from compact_stats import compact_report
 from work_cycle import cycle_text
+from registry_ui import registry_callback, install_registry_inputs
+from profile_registry import selected_source
 
 
 class AdminOnly(BaseMiddleware):
@@ -70,6 +72,7 @@ def settings_kb():
                [('💵 المبلغ الأساسي', 'amount'), ('🪜 مستويات التدبيل', 'mg')],
                [('🛟 التعزيز', 'recovery'), ('🛡 حدود الربح والخسارة', 'limits')],
                [('📉 حماية عائد الزوج', 'payout'), ('⏱ التشغيل والراحة', 'cycle')],
+               [('📡 مصادر الإشارات وإعدادها', 'sources')],
                [('⚡ التوقيتات المتقدمة', 'timing')],
                [('👤 إدارة الحسابات', 'accounts'), ('🏠 الرئيسية', 'home')]])
 
@@ -130,7 +133,8 @@ def limits_text(doc):
 
 
 def accounts_kb():
-    return kb([[('🟢 التحويل للحقيقي | Switch to Real', 'real_confirm')],
+    return kb([[('👥 الحسابات المحفوظة وإضافة حساب', 'account_profiles')],
+               [('🟢 التحويل للحقيقي | Switch to Real', 'real_confirm')],
                [('🟡 التحويل للتجريبي | Switch to Demo', 'mode:PRACTICE')],
                [('✏️ تحديث بيانات الحقيقي', 'credentials:REAL')],
                [('✏️ تحديث بيانات الديمو', 'credentials:PRACTICE')],
@@ -188,6 +192,8 @@ def build_dispatcher(repo, worker, bot):
         try:
             if action == 'noop':
                 return
+            if await registry_callback(action,state,worker,repo,ui):
+                return
             if action == 'home':
                 return await panel(bot, cb, '🎛 لوحة التحكم', home())
             if action == 'start':
@@ -200,7 +206,7 @@ def build_dispatcher(repo, worker, bot):
                 return await panel(bot, cb, text, home())
             if action == 'reset_stats':
                 return await panel(bot, cb, '🗑 تصفير السجل\nسيتم إيقاف التداول وتصفير كل الإحصائيات '
-                                   'والعائد المالي لكلا الحسابين. هل أنت متأكد؟',
+                                   'والعائد المالي لكل الحسابات المحفوظة. هل أنت متأكد؟',
                                    kb([[('نعم، صفّر السجل', 'reset_confirm')], [('إلغاء', 'home')]]))
             if action == 'reset_confirm':
                 await worker.stop()
@@ -214,7 +220,8 @@ def build_dispatcher(repo, worker, bot):
                 text = await worker.diagnose()
                 return await panel(bot, cb, text, home())
             if action == 'status':
-                text = (account_text(repo.doc, worker.po) + risk_summary(repo.doc) +
+                text = (account_text(repo.doc, worker.po) +
+                        f"مصدر الإشارات: @{selected_source(repo.doc)['username']} | {selected_source(repo.doc)['setup_mode']}\n" + risk_summary(repo.doc) +
                         f"المرحلة: {worker.stage}\n"
                         +cycle_text(repo.doc)+'\n'+
 
@@ -411,6 +418,8 @@ def build_dispatcher(repo, worker, bot):
         except Exception as e:
             # Never echo raw exceptions containing Mongo URI/session/WS payloads.
             await ui.notice(f'تعذّرت العملية ({type(e).__name__}). لم يُؤكّد نجاح التغيير؛ راجع الحالة.', home(), view='error')
+
+    install_registry_inputs(dp,worker,repo,ui)
 
     @dp.message(Input.credential)
     async def credential(msg: Message, state: FSMContext):
