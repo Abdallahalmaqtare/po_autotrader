@@ -11,7 +11,6 @@ from aiohttp import web
 from aiogram import Bot
 import config
 from database import Repository
-from startup_settings import dependency_error
 from worker import TradingWorker
 from control_bot import build_dispatcher
 from runtime_support import telegram_startup, poll_controller
@@ -79,7 +78,7 @@ async def main():
     runner = web.AppRunner(health_application(state), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', config.PORT).start()
-    print('[APP] build=v21.1-settings-startup-fix', flush=True)
+    print('[APP] build=v20-payout-cycle-fix', flush=True)
     print(f'[APP] health server bound port={config.PORT}; starting dependencies', flush=True)
     repo = None
     worker = None
@@ -101,7 +100,7 @@ async def main():
                 print('[APP] standby: previous deployment owns lease; health ready, trading/polling not started', flush=True)
             except Exception as e:
                 state['phase'] = 'database_retry'
-                print(dependency_error(e,getattr(repo,'startup_stage','unknown')),flush=True)
+                print('[APP] database not ready:', type(e).__name__, flush=True)
             await wait_or_shutdown(shutdown, 3)
         if shutdown.is_set():
             return

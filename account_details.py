@@ -38,10 +38,7 @@ def account_identity(doc, po=None):
 def account_text(doc, po=None):
     info = account_identity(doc, po)
     label = 'حقيقي REAL' if info['mode'] == 'REAL' else 'تجريبي DEMO / PRACTICE'
-    from profile_registry import active_profile_id
-    profile=doc.get('broker_profiles',{}).get(active_profile_id(doc),{})
-    name=profile.get('name','')
-    return (f"👤 الحساب: {name} — {label}\n"
+    return (f"👤 الحساب: {label}\n"
             f"معرّف حساب المنصة UID: {info['uid'] or 'غير متاح'}\n"
             f"مصدر المعرّف: {info['source']}\n"
             'قد يكون UID نفسه للحقيقي والديمو إذا كانا تابعين لنفس المستخدم؛ نوع الحساب هو الفاصل.\n')

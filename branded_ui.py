@@ -49,8 +49,6 @@ def text_chunks(text, max_units=3900):
 
 def card_for(action, text=''):
     action = action or 'home'
-    if action == 'sources' or action.startswith('src:'):return 'setup'
-    if action == 'account_profiles' or action.startswith('acct:'):return 'accounts'
     if action.startswith('cycle'):
         return 'setup'
     if action.startswith('payout'):

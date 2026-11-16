@@ -10,7 +10,6 @@ from meta_navigation import NavigationError
 from payout_guard import allowed, policy_text, payout_diagnostic
 from work_cycle import transition, cycle_state
 from risk_limits import risk_state
-from profile_registry import manual_mode
 
 
 class PayoutWorkflow:
@@ -120,11 +119,6 @@ class PayoutWorkflow:
             if self.notify:
                 with suppress(Exception):
                     await asyncio.wait_for(self.notify('🛑 حماية عائد الزوج\n'+self.payout_note),5)
-            return False
-        if manual_mode(self.repo.doc):
-            self.stage='payout_wait'
-            self.payout_note='وضع يدوي: العائد غير مناسب؛ لا تنقل أو تبديل للزوج تلقائياً.'
-            await self._pause(2)
             return False
         # SWITCH: no rates / no shared pair means WAIT, never bypass the guard.
         candidates=book.candidates(t['duration_seconds'],policy,exclude=(t['asset'],)) if book else []
